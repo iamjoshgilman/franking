@@ -150,3 +150,62 @@ class TestIdentifiers:
     def test_finds_reference_numbers(self, phish):
         found = phish.identifiers(phish.body_text)
         assert ("INV-2025-0441", "INV", "20250441") in found
+
+
+class TestMultipartAlternative:
+    """Regression: the HTML half of a message must reach the rules.
+
+    body_text used to return only text/plain when both parts existed. In a
+    multipart/alternative phish the plain part is routinely a decoy while
+    the lure lives in the HTML, so urgency, identifiers and -- worst --
+    an archive password were invisible to every rule that searches the
+    body. No fixture caught it because they were all single-part.
+    """
+
+    ALTERNATIVE = (
+        b"From: a@b.example\r\nTo: c@d.example\r\nSubject: statement\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b'Content-Type: multipart/alternative; boundary="alt"\r\n\r\n'
+        b"--alt\r\nContent-Type: text/plain\r\n\r\n"
+        b"Please see the attached statement.\r\n"
+        b"--alt\r\nContent-Type: text/html\r\n\r\n"
+        b"<html><body><p>URGENT: final notice, suspension pending.</p>"
+        b"<p>The archive password is Spring2025!</p>"
+        b"<p>Invoice INV-2025-0441 is overdue.</p></body></html>\r\n"
+        b"--alt--\r\n"
+    )
+
+    def test_both_parts_are_parsed(self):
+        doc = EmailDoc(self.ALTERNATIVE)
+        assert set(doc.bodies) == {"text/plain", "text/html"}
+
+    def test_body_text_includes_the_plain_part(self):
+        assert "attached statement" in EmailDoc(self.ALTERNATIVE).body_text
+
+    def test_body_text_includes_the_html_part(self):
+        body = EmailDoc(self.ALTERNATIVE).body_text.lower()
+        assert "password is spring2025!" in body
+        assert "urgent" in body
+
+    def test_identifiers_are_found_in_the_html_half(self):
+        doc = EmailDoc(self.ALTERNATIVE)
+        assert ("INV-2025-0441", "INV", "20250441") in doc.identifiers(
+            doc.body_text)
+
+    def test_html_only_message_still_works(self):
+        doc = EmailDoc(
+            b"From: a@b.example\r\nTo: c@d.example\r\nSubject: x\r\n"
+            b"Content-Type: text/html\r\n\r\n<html><body>hello</body></html>\r\n"
+        )
+        assert "hello" in doc.body_text
+
+    def test_plain_only_message_still_works(self):
+        doc = EmailDoc(
+            b"From: a@b.example\r\nTo: c@d.example\r\nSubject: x\r\n\r\n"
+            b"hello\r\n"
+        )
+        assert "hello" in doc.body_text
+
+    def test_message_with_no_body_is_empty(self):
+        doc = EmailDoc(b"From: a@b.example\r\nSubject: x\r\n\r\n")
+        assert doc.body_text.strip() == ""

@@ -508,13 +508,23 @@ class EmailDoc:
 
     @property
     def body_text(self) -> str:
-        if "text/plain" in self.bodies:
-            return self.bodies["text/plain"]
-        if "text/html" in self.bodies:
+        """All human-readable body text, plain and HTML parts together.
+
+        Returning only the plain part when one exists would hide the half
+        that matters. In a multipart/alternative phish the plain part is
+        routinely an innocuous decoy -- "please see the attached
+        statement" -- while the lure, the urgency and the archive password
+        live in the HTML the recipient actually sees. Rules that search
+        the body need both.
+        """
+        chunks = []
+        if plain := self.bodies.get("text/plain"):
+            chunks.append(plain)
+        if html := self.bodies.get("text/html"):
             extractor = _LinkExtractor()
-            extractor.feed(self.bodies["text/html"])
-            return extractor.text
-        return ""
+            extractor.feed(html)
+            chunks.append(extractor.text)
+        return "\n".join(chunks)
 
     @staticmethod
     def _first_addr(value: str | None) -> str:
