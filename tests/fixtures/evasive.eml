@@ -1,0 +1,46 @@
+Return-Path: <bounce@mailer-relay-7.example>
+Received: from mailer-relay-7.example ([93.184.216.77])
+	by mx.company.example (Postfix) with ESMTPS id 7B31A2;
+	Thu, 03 Apr 2025 08:14:00 +0000 (UTC)
+Received-SPF: pass (mx.company.example: domain of mailer-relay-7.example designates 93.184.216.77 as permitted sender)
+Authentication-Results: mx.company.example;
+	spf=pass smtp.mailfrom=mailer-relay-7.example;
+	dkim=pass header.d=mailer-relay-7.example;
+	dmarc=fail action=none header.from=paypa1-security.example;
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=mailer-relay-7.example;
+	s=rl7; t=1743668040; bh=Ym9keWhhc2hwbGFjZWhvbGRlcj0=; h=From:To:Subject:Date;
+	b=c2lnbmF0dXJlcGxhY2Vob2xkZXJ0aGF0aXN3ZWxsZm9ybWVkZm9ydGVzdGluZw==
+In-Reply-To: <thread-4471-aug@supplier.example>
+References: <thread-4471-jul@supplier.example> <thread-4471-aug@supplier.example>
+Message-ID: <20250403081400.7B31A2@mailer-relay-7.example>
+Date: Thu, 03 Apr 2025 08:14:00 +0000 (UTC)
+From: "Accounts Payable" <billing@paypa1-security.example>
+To: "Finance" <finance@company.example>
+Subject: RE: Q3 reconciliation - updated statement
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="ev99"
+
+--ev99
+Content-Type: text/plain; charset="UTF-8"
+
+Hi,
+
+Following up on the thread below. The corrected statement is attached.
+The archive password is Spring2025!
+
+You can also review it online at
+https://xn--80ak6aa92e.example/account/verify
+
+Regards,
+Accounts Payable
+
+--ev99
+Content-Type: application/zip; name="Statement_Q3.zip"
+Content-Disposition: attachment; filename="Statement_Q3.zip"
+Content-Transfer-Encoding: base64
+
+UEsDBBQAAQAAAAAAAAB4VjQSIAAAACAAAAAUAAAAU3RhdGVtZW50X1EzLnBkZi5leGXerb7v3q2+
+796tvu/erb7v3q2+796tvu/erb7v3q2+71BLAQIUABQAAQAAAAAAAAB4VjQSIAAAACAAAAAUAAAA
+AAAAAAAAAAAAAAAAAABTdGF0ZW1lbnRfUTMucGRmLmV4ZVBLBQYAAAAAAQABAEIAAABSAAAAAAA=
+
+--ev99--

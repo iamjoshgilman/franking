@@ -8,6 +8,7 @@ quiet is noise.
 import pytest
 
 from franking.model import Severity
+from franking.parse import EmailDoc
 from franking.rules import registered_ids, run_all
 from tests.conftest import fired
 
@@ -88,11 +89,48 @@ class TestContentRules:
     def test_fictional_phone_number(self, phish_findings):
         assert "CONT007" in fired(phish_findings)
 
-    def test_display_name_unrelated_to_domain(self, phish_findings):
-        assert "CONT008" in fired(phish_findings)
-
     def test_display_name_matching_domain_is_quiet(self, clean_findings):
         assert "CONT008" not in fired(clean_findings)
+
+    def test_a_personal_name_is_not_impersonation(self):
+        """The regression that matters: do not accuse ordinary people.
+
+        'Northwind Logistics Billing' at acme-invoices.example may well be
+        a lie, but proving it needs a roster of who may legitimately send
+        as what. The earlier heuristic flagged every human name in order
+        to catch cases like that -- including the employee forwarding a
+        phishing report to the security team.
+        """
+        doc = EmailDoc(
+            b'From: "Dana Whitfield" <dana.whitfield@company.example>\r\n'
+            b"To: ops@company.example\r\nSubject: lunch\r\n\r\nback at 2\r\n"
+        )
+        assert "CONT008" not in fired(run_all(doc))
+
+    def test_brand_in_display_name_from_another_domain_fires(self):
+        doc = EmailDoc(
+            b'From: "PayPal Security" <no-reply@mailer-xyz.example>\r\n'
+            b"To: a@b.example\r\nSubject: verify\r\n\r\ncheck your account\r\n"
+        )
+        findings = [f for f in run_all(doc) if f.id == "CONT008"]
+        assert findings
+        assert "paypal" in findings[0].detail
+
+    def test_brand_in_display_name_from_its_own_domain_is_quiet(self):
+        doc = EmailDoc(
+            b'From: "PayPal Security" <no-reply@paypal.com>\r\n'
+            b"To: a@b.example\r\nSubject: receipt\r\n\r\nthanks\r\n"
+        )
+        assert "CONT008" not in fired(run_all(doc))
+
+    def test_address_hidden_in_a_display_name_fires(self):
+        doc = EmailDoc(
+            b'From: "billing@supplier.example" <attacker@evil.example>\r\n'
+            b"To: a@b.example\r\nSubject: invoice\r\n\r\npay up\r\n"
+        )
+        findings = [f for f in run_all(doc) if f.id == "CONT008"]
+        assert findings
+        assert "supplier.example" in findings[0].detail
 
 
 class TestAttachmentRules:

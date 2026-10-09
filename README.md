@@ -43,11 +43,34 @@ something else in the file*:
 - The body cites invoice `INV-2025-0012` while the link carries
   `INV-2025-0987`. A real portal link is generated from the record it points
   at; a campaign's landing page is static.
+- SPF and DKIM both pass — for `mailer-relay-7.example`, while the message
+  displays as coming from `paypa1-security.example`. Authentication proves
+  the sender controls *a* domain, never that it is the one the reader sees.
+  This is what DMARC alignment exists to close.
+- A link points at `xn--80ak6aa92e.example`, which renders as `аррӏе.example`
+  in Cyrillic.
 - An attachment is named `invoice.pdf.bat`.
+- An archive is encrypted and the body supplies the password: the gateway
+  cannot read it, the recipient can.
 
 No parser flags a *missing* header, and none of these fall out of a field
-dump. franking encodes 29 of these checks as rules, each one explaining its
+dump. franking encodes 35 of these checks as rules, each one explaining its
 own reasoning and tagged with the relevant MITRE ATT&CK technique.
+
+## Forwarded reports
+
+A reported phish rarely arrives as a bare `.eml`. It arrives attached to
+"FW: is this legit?", and analysing the covering note describes the
+employee who reported it rather than the attacker. franking unwraps to the
+message being reported — recursively, so a forward of a forward still
+resolves — and attributes every finding to it:
+
+```
+$ franking report.eml --findings
+franking: unwrapped 'FW: is this legit?' to the message attached to it
+```
+
+Pass `--wrapper` to analyse the covering message instead.
 
 ## Install
 
@@ -177,9 +200,35 @@ ruff check .
 
 franking reads files. It does not resolve DNS, fetch URLs, detonate
 attachments or call out to any service, so it is safe to point at live
-samples and it works offline. Verifying that a domain's SPF record really
-authorises an address is deliberately out of scope — that needs the network,
-and it is a different tool.
+samples, it works offline, and no sample ever leaves the host. For an
+organisation that cannot upload mail to a cloud service, that is the
+point of it rather than a limitation.
+
+What it is: an analyst's lens on **one message**, that shows its working.
+What it is not: a mail security platform. It has no ingestion pipeline, no
+reputation feeds and no case management, and it is not trying to replace
+the gateway.
+
+Known gaps, stated plainly so nobody discovers them the hard way:
+
+- **No Outlook `.msg`** — only RFC 822 `.eml`.
+- **No live verification.** Whether a domain's SPF record really authorises
+  an address, how old the domain is, and what any reputation service thinks
+  all need the network. Domain age in particular is among the strongest
+  signals available, and franking cannot see it.
+- **Shallow attachment analysis.** Extension chains, magic bytes and archive
+  listings only. No Office macro or VBA inspection, no remote template
+  injection, no PDF `/OpenAction` or `/JavaScript`, no HTML smuggling, no
+  QR codes in images.
+- **Weak against pure-text BEC.** The rules key on attachments and links. A
+  message with neither — "are you at your desk? I need a wire sent" — scores
+  low. Catching those needs a roster of who may legitimately send as whom,
+  which is configuration that does not exist yet. For the same reason,
+  `CONT008` only reports display-name impersonation it can prove: a brand
+  name, or an address hidden inside the display name. It will not guess
+  that an unfamiliar company name is a lie.
+- **No team workflow.** No MISP or STIX export, no campaign clustering, no
+  audit trail.
 
 ## Licence
 

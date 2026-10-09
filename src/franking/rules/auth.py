@@ -9,7 +9,55 @@ is the part a forger has to get right and usually does not.
 from __future__ import annotations
 
 from franking.model import Evidence, Severity
+from franking.parse import org_domain
 from franking.rules import rule
+
+
+@rule(
+    "AUTH009",
+    "Authentication passed for a domain that is not the From domain",
+    Severity.HIGH,
+    mitre=["T1656"],
+)
+def authentication_not_aligned(doc, emit):
+    """The gap SPF and DKIM leave open on their own.
+
+    Each authenticates *a* domain, not necessarily the domain the reader
+    sees. DMARC exists precisely because a pass means nothing until the
+    authenticated identity aligns with the visible From.
+    """
+    from_domain = doc.domain_of(doc.from_addr)
+    if not from_domain:
+        return None
+    from_org = org_domain(from_domain)
+
+    checks = (
+        ("SPF", doc.auth.spf, doc.auth.spf_domain, "envelope sender"),
+        ("DKIM", doc.auth.dkim, doc.auth.dkim_domain, "signing domain"),
+    )
+    passed = [(name, dom, what) for name, result, dom, what in checks
+              if result == "pass" and dom]
+    if not passed:
+        return None
+    if any(org_domain(dom) == from_org for _, dom, _ in passed):
+        return None
+
+    summary = "; ".join(f"{name} passed for {dom} ({what})"
+                        for name, dom, what in passed)
+    return emit(
+        f"{summary} -- but the message displays as being from "
+        f"{from_domain}. A pass only proves the sender controls the domain "
+        f"it was checked against, and that is not the domain the reader "
+        f"sees. This is the gap DMARC alignment closes, and it is how mail "
+        f"from a compromised bulk sender or an attacker's own domain lands "
+        f"in an inbox showing green authentication results.",
+        [
+            Evidence("From domain", from_domain),
+            *[Evidence(f"{name} authenticated", dom)
+              for name, dom, _ in passed],
+            Evidence("Authentication-Results", doc.auth.raw or ""),
+        ],
+    )
 
 
 @rule(

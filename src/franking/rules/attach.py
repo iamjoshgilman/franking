@@ -7,9 +7,18 @@ is not the type its name advertises.
 
 from __future__ import annotations
 
+import re
+
 from franking.model import Evidence, Severity
 from franking.parse import DOCUMENT_EXTS, EXECUTABLE_EXTS
 from franking.rules import rule
+
+# "the password is hunter2", "pw: hunter2", "passcode hunter2"
+PASSWORD_RE = re.compile(
+    r"(?:pass\s?(?:word|code)|pwd|pw)\s*(?:is|=|:)?\s*[\"'‘“]?"
+    r"([^\s\"'’”<>]{2,40})",
+    re.I,
+)
 
 # Leading bytes -> what the file actually is, regardless of its name.
 MAGIC = (
@@ -140,6 +149,64 @@ def bare_executable(doc, emit):
                 Evidence("SHA-256", att.sha256),
             ],
             title_override=f"Executable attachment: {att.filename}",
+        ))
+    return findings
+
+
+@rule("ATT006", "Encrypted archive with the password in the message",
+      Severity.CRITICAL, mitre=["T1027.002", "T1566.001"])
+def encrypted_archive_with_password(doc, emit):
+    """The oldest trick that still works on most mail gateways.
+
+    A scanner cannot read what it cannot decrypt, so an encrypted archive
+    passes inspection untouched. Putting the password in the body hands
+    the recipient the key the gateway was denied, which is the whole
+    design -- and why the combination says far more than either half.
+    """
+    findings = []
+    match = PASSWORD_RE.search(doc.body_text)
+
+    for att in doc.attachments:
+        if not att.is_encrypted:
+            continue
+        locked = ", ".join(e.name for e in att.archive_entries if e.encrypted)
+        if match:
+            detail = (
+                f"'{att.filename}' is encrypted, and the body supplies the "
+                f"password. Encryption stops the mail gateway and any "
+                f"sandbox from examining the contents, while the recipient "
+                f"is handed exactly what they need to open it. That "
+                f"asymmetry is the point: it is an anti-analysis measure "
+                f"aimed past the user at the controls protecting them."
+            )
+            severity = Severity.CRITICAL
+            evidence = [
+                Evidence("Archive", att.filename),
+                Evidence("Encrypted entries", locked),
+                Evidence("Password hint in body", match.group(0).strip()),
+                Evidence("SHA-256", att.sha256),
+            ]
+        else:
+            detail = (
+                f"'{att.filename}' is encrypted, so neither a gateway nor "
+                f"this tool can inspect what it holds. Filenames remain "
+                f"readable from the archive headers, but the contents are "
+                f"opaque. If the sender expects it to be opened, the "
+                f"password reached the recipient somehow -- check the thread."
+            )
+            severity = Severity.HIGH
+            evidence = [
+                Evidence("Archive", att.filename),
+                Evidence("Encrypted entries", locked),
+                Evidence("SHA-256", att.sha256),
+            ]
+        findings.append(emit(
+            detail, evidence,
+            severity_override=severity,
+            title_override=(
+                f"Encrypted archive {att.filename}"
+                + (" with password in body" if match else "")
+            ),
         ))
     return findings
 

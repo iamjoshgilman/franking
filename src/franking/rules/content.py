@@ -10,7 +10,14 @@ from __future__ import annotations
 import re
 
 from franking.model import Evidence, Severity
+from franking.parse import ADDR_RE, BRAND_STEMS, org_domain
 from franking.rules import rule
+
+# A bare domain appearing inside free text, e.g. in a display name.
+DOMAIN_IN_TEXT_RE = re.compile(
+    r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|co|io|uk|de|fr|us|ca|au|example)\b",
+    re.I,
+)
 
 URGENCY_TERMS = (
     "urgent", "immediately", "final notice", "overdue", "suspend",
@@ -181,28 +188,62 @@ def fictional_phone_number(doc, emit):
     )
 
 
-@rule("CONT008", "Sender display name does not match the sending domain",
-      Severity.MEDIUM, mitre=["T1656"])
-def display_name_mismatch(doc, emit):
+@rule("CONT008", "Display name impersonates a different sender",
+      Severity.HIGH, mitre=["T1656"])
+def display_name_impersonation(doc, emit):
+    """Only the cases that stand on their own evidence.
+
+    An earlier version flagged any display name whose words were absent
+    from the domain, which fires on every personal name -- 'Dana
+    Whitfield' at company.example is simply a person, and accusing the
+    employee who reported a phish is a fast way to lose an analyst's
+    trust. Judging whether an arbitrary organisation name belongs to a
+    domain needs a roster of who legitimately sends as what, and that is
+    configuration this tool does not have yet.
+    """
     display = doc.from_display
     domain = doc.domain_of(doc.from_addr)
     if not display or not domain:
         return None
-    words = [w for w in re.findall(r"[a-z]{4,}", display.lower())
-             if w not in {"team", "dept", "department", "support", "service",
-                          "info", "noreply", "admin", "group", "office"}]
-    if not words:
-        return None
-    root = domain.split(".")[0].replace("-", "")
-    if any(w in root or root in w for w in words):
-        return None
-    return emit(
-        f"The message presents as '{display}' but is sent from {domain}. "
-        f"Most clients show only the display name, which is free text the "
-        f"sender chooses. Where the name implies one organisation and the "
-        f"domain is another, the name is doing the deceiving.",
-        [Evidence("Display name", display), Evidence("Sending domain", domain)],
-    )
+    sending_org = org_domain(domain)
+
+    # A display name carrying an address or domain of its own. Clients
+    # show the name and hide the address, so "security@paypal.com" reads
+    # as the sender while the mail came from somewhere else entirely.
+    claimed = ADDR_RE.search(display) or DOMAIN_IN_TEXT_RE.search(display)
+    if claimed:
+        claimed_domain = claimed.group(0).split("@")[-1].lower().strip(".")
+        if org_domain(claimed_domain) != sending_org:
+            return emit(
+                f"The display name is '{display}', which carries the "
+                f"address or domain '{claimed_domain}', but the message was "
+                f"sent from {domain}. Mail clients show the display name and "
+                f"hide the real address, so the reader sees a sender that "
+                f"had nothing to do with this message.",
+                [
+                    Evidence("Display name", display),
+                    Evidence("Claimed", claimed_domain),
+                    Evidence("Actually sent from", domain),
+                ],
+            )
+
+    # A display name invoking a brand the sending domain does not belong to.
+    words = set(re.findall(r"[a-z0-9]{3,}", display.lower()))
+    for brand in sorted(BRAND_STEMS & words):
+        if sending_org.split(".")[0] == brand:
+            return None
+        return emit(
+            f"The message presents as '{display}', invoking {brand}, but was "
+            f"sent from {domain}, which is not a {brand} domain. The display "
+            f"name is free text chosen by the sender, and it is the only "
+            f"part most clients show.",
+            [
+                Evidence("Display name", display),
+                Evidence("Brand invoked", brand),
+                Evidence("Sending domain", domain),
+            ],
+        )
+    return None
 
 
 @rule("CONT009", "Malformed HTML structure", Severity.INFO)

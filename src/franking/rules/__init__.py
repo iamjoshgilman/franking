@@ -84,6 +84,12 @@ def registered_ids() -> list[str]:
 
 
 # Importing the rule modules is what populates the registry.
-from franking.rules import attach, auth, content, routing  # noqa: E402,F401
+from franking.rules import (  # noqa: E402,F401
+    attach,
+    auth,
+    content,
+    identity,
+    routing,
+)
 
 __all__ = ["rule", "run_all", "registered_ids", "Evidence", "Severity"]

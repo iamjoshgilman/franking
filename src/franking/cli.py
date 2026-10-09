@@ -39,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="print the section tree and exit")
 
     tweak = parser.add_argument_group("output tuning")
+    tweak.add_argument(
+        "--wrapper", action="store_true",
+        help="analyse the covering message rather than the one attached to "
+             "it; by default a forwarded report is unwrapped to the message "
+             "being reported",
+    )
     tweak.add_argument("--no-color", action="store_true",
                        help="disable ANSI colour")
     tweak.add_argument("--no-evidence", action="store_true",
@@ -66,6 +72,20 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"franking: cannot parse {args.file}: {exc}", file=sys.stderr)
         return 1
+
+    # A reported phish arrives attached to a covering note. Analysing the
+    # note tells you about the employee who reported it, which is never
+    # the question being asked.
+    outer = doc
+    if doc.nested and not args.wrapper:
+        doc = doc.innermost()
+        if not args.json:
+            print(
+                f"franking: unwrapped {outer.subject or '(no subject)'!r} "
+                f"to the message attached to it "
+                f"(--wrapper to analyse the covering message instead)",
+                file=sys.stderr,
+            )
 
     findings = run_all(doc)
 
