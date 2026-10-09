@@ -1,0 +1,92 @@
+/* phishlens -- dark, low-chrome, three-pane layout.
+ *
+ * All custom variables are pl- prefixed. Textual reserves plain names like
+ * $panel, $accent, $surface and $text for its own theme system, and
+ * redefining those breaks the built-in stylesheet.
+ */
+
+$pl-bg:     #11141a;
+$pl-panel:  #171b23;
+$pl-edge:   #262c38;
+$pl-text:   #e8eaed;
+$pl-muted:  #7a8290;
+$pl-accent: #5ac8fa;
+
+Screen {
+    background: $pl-bg;
+    color: $pl-text;
+}
+
+#banner {
+    height: 3;
+    padding: 0 1;
+    background: $pl-panel;
+    border-bottom: solid $pl-edge;
+}
+
+#columns {
+    height: 1fr;
+}
+
+OptionList {
+    /* Defaults to height: auto, which would stop the divider partway down. */
+    height: 1fr;
+    background: $pl-bg;
+    border: none;
+    border-right: solid $pl-edge;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+OptionList:focus {
+    border-right: solid $pl-accent;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: $pl-edge;
+    color: $pl-text;
+    text-style: bold;
+}
+
+OptionList:focus > .option-list--option-highlighted {
+    background: $pl-accent 25%;
+    color: $pl-text;
+    text-style: bold;
+}
+
+#spine {
+    width: 24;
+    min-width: 18;
+}
+
+#items {
+    width: 2fr;
+    min-width: 28;
+    border-title-color: $pl-muted;
+    border-title-align: left;
+}
+
+#detail-wrap {
+    width: 3fr;
+    min-width: 30;
+    background: $pl-panel;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+#detail {
+    width: 100%;
+}
+
+#search {
+    dock: bottom;
+    border: none;
+    border-top: solid $pl-accent;
+    background: $pl-panel;
+    padding: 0 1;
+}
+
+Footer {
+    background: $pl-panel;
+    color: $pl-muted;
+}

@@ -1,0 +1,29 @@
+Return-Path: <notifications@supplier.example>
+Received: from mta-03.supplier.example ([93.184.216.34])
+	by mx.company.example (Postfix) with ESMTPS id 9F2C11;
+	Tue, 11 Mar 2025 09:30:00 +0000 (UTC)
+Received-SPF: pass (mx.company.example: domain of supplier.example designates 93.184.216.34 as permitted sender)
+Authentication-Results: mx.company.example;
+	spf=pass smtp.mailfrom=supplier.example;
+	dkim=pass header.d=supplier.example;
+	dmarc=pass action=none header.from=supplier.example;
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=supplier.example;
+	s=mail2025; t=1741685400; bh=ZXhhbXBsZWJvZHloYXNodmFsdWU9; h=From:To:Subject:Date;
+	b=dGhpc2lzbm90YXJlYWxzaWduYXR1cmVidXRpdGlzd2VsbGZvcm1lZGZvcnRlc3Rz
+Message-ID: <20250311093000.9F2C11@supplier.example>
+Date: Tue, 11 Mar 2025 09:30:00 +0000 (UTC)
+From: "Supplier Notifications" <notifications@supplier.example>
+To: "Operations" <ops@company.example>
+Subject: Monthly delivery schedule for March
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hello,
+
+The delivery schedule for March is now available in your supplier
+portal. No action is needed; this message is for your records.
+
+If you have questions, reply to this message and the operations desk
+will pick it up.
+
+Supplier Notifications

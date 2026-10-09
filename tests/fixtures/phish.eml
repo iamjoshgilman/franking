@@ -1,0 +1,58 @@
+Return-Path: <billing@acme-invoices.example>
+Reply-To: <recovery@secure-acme-portal.example>
+X-Mailer: Microsoft Outlook 16.0
+X-Originating-IP: [45.33.21.9]
+X-Priority: 1 (Highest)
+X-AntiSpam: Passed
+Received-SPF: Pass (protection.outlook.com: domain of acme-invoices.example designates 45.33.21.9 as permitted sender)
+ARC-Seal: i=1; a=rsa-sha256; d=acme-invoices.example; s=arc-2025; t=1677416100; cv=pass;
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=acme-invoices.example; s=arc-2025;
+Received: from mail.acme-invoices.example ([203.0.113.9])
+	by mx.victim.example (Postfix) with ESMTP id AA1122;
+	Tue, 11 Mar 2025 09:40:00 +0000 (UTC)
+Received: from billing@acme-invoices.example ([198.51.100.8])
+	by mail.acme-invoices.example with ESMTP id BB3344;
+	Tue, 11 Mar 2025 09:30:00 +0000 (UTC)
+Authentication-Results: spf=pass smtp.mailfrom=acme-invoices.example;
+	dkim=pass header.d=acme-invoices.example;
+	dmarc=pass action=none header.from=acme-invoices.example;
+Message-ID: <20250311094000.AA1122@acme-invoices.example>
+Date: Tue, 11 Mar 2025 09:40:00 +0000 (UTC)
+From: "Northwind Logistics Billing" <billing@acme-invoices.example>
+To: "Accounts Payable" <ap@victim.example>
+Subject: Urgent: account suspension pending - invoice INV-2025-0441 overdue
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bnd42"
+
+--bnd42
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html>
+<body>
+<p>Dear Accounts Payable,</p>
+<p>This is a final notice. Invoice INV-2025-0441 is overdue and your
+account is flagged for suspension. Failure to act within 24 hours will
+result in penalties.</p>
+<p>Review the statement here:
+<a href=3D"https://secure-acme-portal.example/pay/INV-2025-9988">
+https://billing.acme-invoices.example/invoice</a></p>
+<p>The statement is also attached.</p>
+<p>Billing Team<br>Northwind Logistics</p>
+</body>
+<p>Questions? Call +1-800-555-0142.</p>
+</html>
+
+--bnd42
+Content-Type: application/zip; name="statement_march.zip"
+Content-Disposition: attachment; filename="statement_march.zip"
+Content-Transfer-Encoding: base64
+
+UEsDBBQAAAAIAONcSV3ZPzqCBwAAAHoAAAAXAAAAc3RhdGVtZW50X21hcmNoLnBkZi5leGXzjWIY
+IAAAUEsDBBQAAAAIAONcSV3zIGpcKwAAACkAAAAKAAAAcmVhZG1lLnR4dPMvSM1TKMlIVSguSSxJ
+zU3NK1EoyVcoy0wtV6jMLy1SSErMScxLTtXjAgBQSwECFAMUAAAACADjXEld2T86ggcAAAB6AAAA
+FwAAAAAAAAAAAAAAgAEAAAAAc3RhdGVtZW50X21hcmNoLnBkZi5leGVQSwECFAMUAAAACADjXEld
+8yBqXCsAAAApAAAACgAAAAAAAAAAAAAAgAE8AAAAcmVhZG1lLnR4dFBLBQYAAAAAAgACAH0AAACP
+AAAAAAA=
+
+--bnd42--
