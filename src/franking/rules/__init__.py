@@ -1,7 +1,7 @@
 """The rule registry.
 
-A rule is a function that looks at a parsed :class:`~phishlens.parse.EmailDoc`
-and either stays quiet or emits one or more :class:`~phishlens.model.Finding`
+A rule is a function that looks at a parsed :class:`~franking.parse.EmailDoc`
+and either stays quiet or emits one or more :class:`~franking.model.Finding`
 objects. Rules are registered by decorating them::
 
     @rule("AUTH001", "Short title", Severity.HIGH, mitre=["T1656"])
@@ -18,8 +18,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from phishlens.model import Evidence, Finding, Severity
-from phishlens.parse import EmailDoc
+from franking.model import Evidence, Finding, Severity
+from franking.parse import EmailDoc
 
 RuleFn = Callable[[EmailDoc], list[Finding]]
 _REGISTRY: dict[str, RuleFn] = {}
@@ -84,6 +84,6 @@ def registered_ids() -> list[str]:
 
 
 # Importing the rule modules is what populates the registry.
-from phishlens.rules import attach, auth, content, routing  # noqa: E402,F401
+from franking.rules import attach, auth, content, routing  # noqa: E402,F401
 
 __all__ = ["rule", "run_all", "registered_ids", "Evidence", "Severity"]

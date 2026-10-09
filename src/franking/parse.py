@@ -1,7 +1,7 @@
 """Turn a .eml file into structured facts the rules can reason about.
 
 Nothing in here judges the message -- it only extracts. All the "is this
-suspicious" logic lives in :mod:`phishlens.rules`, so the parser stays
+suspicious" logic lives in :mod:`franking.rules`, so the parser stays
 reusable and the rules stay testable.
 """
 

@@ -1,9 +1,13 @@
-# phishlens
+# franking
 
 An interactive analysis lens for suspicious `.eml` files.
 
+> A *franking mark* is the postmark that proves postage was genuinely paid.
+> Forging one has been a crime since the penny post. This tool asks the same
+> question of an email: are the marks it carries real, or just printed on?
+
 Most email tooling will happily print a header block and leave you to spot
-what is wrong. phishlens does the cross-referencing: it checks claimed
+what is wrong. franking does the cross-referencing: it checks claimed
 authentication results against the rest of the message, compares what a link
 says against where it goes, and looks inside archives at what is actually
 being delivered. Then it tells you *why* each answer matters, not just what
@@ -23,7 +27,7 @@ it is.
    Body [1]          │ ✗ SPF-authorised IP is absent fr…   │  why it matters
    Headers [25]      │ ⚠ Incomplete ARC set › 5            │  The file inside Invoice_20…
    IOCs › 13         │ ⚠ SPF verifier does not appear i…   │  'invoice_document.pdf.bat'…
- q Quit  ? Help  y Copy value  Y Copy section  a Copy IOCs  e Export JSON  / Search
+ q Quit  ? Help  y Copy  Y Copy section  a Copy IOCs  H Copy SHA-256  / Search  f Findings
 ```
 
 ## Why
@@ -42,42 +46,39 @@ something else in the file*:
 - An attachment is named `invoice.pdf.bat`.
 
 No parser flags a *missing* header, and none of these fall out of a field
-dump. phishlens encodes 29 of these checks as rules, each one explaining its
+dump. franking encodes 29 of these checks as rules, each one explaining its
 own reasoning and tagged with the relevant MITRE ATT&CK technique.
 
 ## Install
 
 ```bash
-uv tool install phishlens          # or: pipx install phishlens
+uv tool install franking          # or: pipx install franking
 ```
 
 From a clone:
 
 ```bash
-git clone https://github.com/iamjoshgilman/phishlens
-cd phishlens
+git clone https://github.com/iamjoshgilman/franking
+cd franking
 uv tool install .                  # or: pip install -e '.[dev]'
 ```
 
 ## Use
 
 ```bash
-phishlens message.eml              # interactive browser
-phishlens message.eml --findings   # scrollback-friendly report
-phishlens message.eml --iocs       # indicators, one per line
-phishlens message.eml --json       # everything, machine-readable
-phishlens message.eml --tree       # section outline
+franking message.eml              # interactive browser
+franking message.eml --findings   # scrollback-friendly report
+franking message.eml --iocs       # indicators, one per line
+franking message.eml --json       # everything, machine-readable
+franking message.eml --tree       # section outline
 ```
-
-The command also installs as `sherlock`, after what Hack The Box calls
-these challenges.
 
 `--findings` exits non-zero when anything high or critical fired, so it drops
 straight into a pipeline:
 
 ```bash
 for f in samples/*.eml; do
-  phishlens "$f" --findings --no-color --min-severity high || echo "FLAGGED: $f"
+  franking "$f" --findings --no-color --min-severity high || echo "FLAGGED: $f"
 done
 ```
 
@@ -111,7 +112,7 @@ Clipboard writes go through `wl-copy`, `xclip`, `xsel`, `pbcopy` or
 `clip.exe`, whichever exists, and fall back to OSC 52 so `y` still works
 over SSH.
 
-Selecting text with the mouse needs **shift+drag**. Like any TUI, phishlens
+Selecting text with the mouse needs **shift+drag**. Like any TUI, franking
 puts the terminal into mouse-tracking mode, so a plain drag is delivered to
 the application rather than the terminal; shift bypasses that in Ghostty,
 Alacritty, kitty and foot. Clicking a row also selects it, so you can click
@@ -142,7 +143,7 @@ from training platforms does not quietly end up in a blocklist.
 
 ## Writing a rule
 
-Rules live in `src/phishlens/rules/` and register themselves with a
+Rules live in `src/franking/rules/` and register themselves with a
 decorator. A rule gets the parsed message and either stays quiet or emits
 findings:
 
@@ -174,7 +175,7 @@ ruff check .
 
 ## Scope
 
-phishlens reads files. It does not resolve DNS, fetch URLs, detonate
+franking reads files. It does not resolve DNS, fetch URLs, detonate
 attachments or call out to any service, so it is safe to point at live
 samples and it works offline. Verifying that a domain's SPF record really
 authorises an address is deliberately out of scope — that needs the network,

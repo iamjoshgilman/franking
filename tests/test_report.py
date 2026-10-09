@@ -2,9 +2,9 @@
 
 import json
 
-from phishlens.cli import main
-from phishlens.report import findings_report, iocs_report, json_report
-from phishlens.view import build_tree
+from franking.cli import main
+from franking.report import findings_report, iocs_report, json_report
+from franking.view import build_tree
 from tests.conftest import FIXTURES
 
 

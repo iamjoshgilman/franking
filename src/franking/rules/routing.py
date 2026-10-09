@@ -8,9 +8,9 @@ server would have written them.
 
 from __future__ import annotations
 
-from phishlens.model import Evidence, Severity
-from phishlens.parse import ADDR_RE, classify_ip
-from phishlens.rules import rule
+from franking.model import Evidence, Severity
+from franking.parse import ADDR_RE, classify_ip
+from franking.rules import rule
 
 
 @rule(

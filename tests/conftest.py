@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from phishlens.parse import EmailDoc
-from phishlens.rules import run_all
+from franking.parse import EmailDoc
+from franking.rules import run_all
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

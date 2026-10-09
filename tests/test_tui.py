@@ -11,8 +11,8 @@ import pytest
 
 textual = pytest.importorskip("textual")
 
-from phishlens.model import Node, Severity  # noqa: E402
-from phishlens.tui.app import PhishLensApp, _row  # noqa: E402
+from franking.model import Node, Severity  # noqa: E402
+from franking.tui.app import FrankingApp, _row  # noqa: E402
 
 
 def drive(app, coro):
@@ -25,7 +25,7 @@ def drive(app, coro):
 
 @pytest.fixture
 def app(phish, phish_findings):
-    return PhishLensApp(phish, phish_findings)
+    return FrankingApp(phish, phish_findings)
 
 
 async def goto(app, pilot, section: str):

@@ -40,8 +40,13 @@ def _osc52(text: str) -> bool:
         return False
 
 
-def copy(text: str) -> tuple[bool, str]:
-    """Copy ``text``. Returns (success, description of the method used)."""
+def copy(text: str, osc52: bool = True) -> tuple[bool, str]:
+    """Copy ``text``. Returns (success, description of the method used).
+
+    Pass ``osc52=False`` when something else owns the terminal -- a running
+    TUI -- so the escape sequence is never written into its output. The
+    caller then supplies its own fallback.
+    """
     if not text:
         return False, "nothing to copy"
 
@@ -53,16 +58,20 @@ def copy(text: str) -> tuple[bool, str]:
                 command,
                 input=text.encode(),
                 check=True,
-                capture_output=True,
+                # Deliberately NOT capture_output: wl-copy forks a server to
+                # hold the selection, and that child inherits the pipes, so
+                # capturing blocks until the timeout and a copy that
+                # actually worked is reported as a failure.
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=5,
-                # wl-copy forks a server to own the selection; without this
-                # it can be reaped when the TUI exits.
+                # Keep that server alive after this process exits.
                 start_new_session=(name == "wl-copy"),
             )
             return True, name
         except (subprocess.SubprocessError, OSError):
             continue
 
-    if os.environ.get("TERM") and _osc52(text):
+    if osc52 and os.environ.get("TERM") and _osc52(text):
         return True, "OSC 52"
     return False, "no clipboard helper found"

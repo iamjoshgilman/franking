@@ -1,4 +1,4 @@
-/* phishlens -- dark, low-chrome, three-pane layout.
+/* franking -- dark, low-chrome, three-pane layout.
  *
  * All custom variables are pl- prefixed. Textual reserves plain names like
  * $panel, $accent, $surface and $text for its own theme system, and

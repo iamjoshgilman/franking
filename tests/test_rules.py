@@ -7,8 +7,8 @@ quiet is noise.
 
 import pytest
 
-from phishlens.model import Severity
-from phishlens.rules import registered_ids, run_all
+from franking.model import Severity
+from franking.rules import registered_ids, run_all
 from tests.conftest import fired
 
 

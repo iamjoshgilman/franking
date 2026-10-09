@@ -6,8 +6,8 @@ disagree about what the message contains.
 
 from __future__ import annotations
 
-from phishlens.model import Finding, Node, Severity
-from phishlens.parse import EmailDoc
+from franking.model import Finding, Node, Severity
+from franking.parse import EmailDoc
 
 
 def _verdict(findings: list[Finding]) -> tuple[str, Severity]:

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-from phishlens.model import Evidence, Severity
-from phishlens.rules import rule
+from franking.model import Evidence, Severity
+from franking.rules import rule
 
 URGENCY_TERMS = (
     "urgent", "immediately", "final notice", "overdue", "suspend",

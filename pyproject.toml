@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "phishlens"
+name = "franking"
 version = "0.1.0"
 description = "An interactive analysis lens for suspicious .eml files"
 readme = "README.md"
@@ -25,17 +25,14 @@ dependencies = ["textual>=0.80"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
-phishlens = "phishlens.cli:main"
-# Short alias: these challenges are called "Sherlocks" on Hack The Box,
-# which is what the tool mostly gets pointed at.
-sherlock = "phishlens.cli:main"
+franking = "franking.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/iamjoshgilman/phishlens"
-Issues = "https://github.com/iamjoshgilman/phishlens/issues"
+Homepage = "https://github.com/iamjoshgilman/franking"
+Issues = "https://github.com/iamjoshgilman/franking/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/phishlens"]
+packages = ["src/franking"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -52,4 +49,4 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 # The rule modules are imported for their registration side effect.
-"src/phishlens/rules/__init__.py" = ["E402", "F401"]
+"src/franking/rules/__init__.py" = ["E402", "F401"]

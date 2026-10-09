@@ -8,8 +8,8 @@ is the part a forger has to get right and usually does not.
 
 from __future__ import annotations
 
-from phishlens.model import Evidence, Severity
-from phishlens.rules import rule
+from franking.model import Evidence, Severity
+from franking.rules import rule
 
 
 @rule(

@@ -7,9 +7,9 @@ is not the type its name advertises.
 
 from __future__ import annotations
 
-from phishlens.model import Evidence, Severity
-from phishlens.parse import DOCUMENT_EXTS, EXECUTABLE_EXTS
-from phishlens.rules import rule
+from franking.model import Evidence, Severity
+from franking.parse import DOCUMENT_EXTS, EXECUTABLE_EXTS
+from franking.rules import rule
 
 # Leading bytes -> what the file actually is, regardless of its name.
 MAGIC = (

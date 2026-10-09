@@ -17,11 +17,11 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from phishlens import clipboard
-from phishlens.model import Finding, Node, Severity
-from phishlens.parse import EmailDoc
-from phishlens.report import json_report
-from phishlens.view import build_tree
+from franking import clipboard
+from franking.model import Finding, Node, Severity
+from franking.parse import EmailDoc
+from franking.report import json_report
+from franking.view import build_tree
 
 SEVERITY_STYLE = {
     Severity.CRITICAL: "bold #ff5c57",
@@ -62,11 +62,11 @@ def _row(node: Node, width: int) -> Text:
     return text
 
 
-class PhishLensApp(App):
+class FrankingApp(App):
     """Interactive .eml analysis."""
 
     CSS_PATH = "app.tcss"
-    TITLE = "phishlens"
+    TITLE = "franking"
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -392,10 +392,17 @@ class PhishLensApp(App):
             spine.focus()
 
     def _copy(self, value: str, what: str = "") -> None:
-        ok, how = clipboard.copy(value)
+        # osc52=False: writing that escape to stdout ourselves would land in
+        # the middle of Textual's own output. Textual drives the same
+        # sequence properly, so it is the fallback instead.
+        ok, how = clipboard.copy(value, osc52=False)
         if not ok:
-            self.notify(f"copy failed: {how}", severity="error")
-            return
+            try:
+                self.copy_to_clipboard(value)
+                ok, how = True, "terminal"
+            except Exception:  # noqa: BLE001 - a failed copy is not fatal
+                self.notify(f"copy failed: {how}", severity="error")
+                return
         preview = value if len(value) <= 48 else value[:45] + "…"
         self.notify(f"copied {what}{preview}", title=how)
 
@@ -483,7 +490,7 @@ class PhishLensApp(App):
 
     def action_export(self) -> None:
         stem = self.doc.path.stem if self.doc.path else "message"
-        target = Path.cwd() / f"{stem}.phishlens.json"
+        target = Path.cwd() / f"{stem}.franking.json"
         try:
             target.write_text(json_report(self.doc, self.findings))
         except OSError as exc:
@@ -504,4 +511,4 @@ class PhishLensApp(App):
 
 
 def run(doc: EmailDoc, findings: list[Finding]) -> None:
-    PhishLensApp(doc, findings).run()
+    FrankingApp(doc, findings).run()

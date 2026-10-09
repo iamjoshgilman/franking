@@ -1,6 +1,6 @@
 """Parser tests: extraction only, no judgement."""
 
-from phishlens.parse import EmailDoc, classify_ip, scan_zip_entries
+from franking.parse import EmailDoc, classify_ip, scan_zip_entries
 
 
 class TestAddresses:

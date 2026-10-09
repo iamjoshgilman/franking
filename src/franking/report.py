@@ -6,9 +6,9 @@ import json
 import shutil
 import textwrap
 
-from phishlens.model import Finding, Node, Severity
-from phishlens.parse import EmailDoc
-from phishlens.view import build_tree
+from franking.model import Finding, Node, Severity
+from franking.parse import EmailDoc
+from franking.view import build_tree
 
 ANSI = {
     Severity.CRITICAL: "\033[1;31m",
