@@ -10,8 +10,10 @@ from __future__ import annotations
 import email
 import email.policy
 import hashlib
+import io
 import re
 import struct
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.message import EmailMessage
@@ -31,13 +33,31 @@ DOC_RANGES = (
 PRIVATE_PREFIXES = ("10.", "192.168.", "127.")
 
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Matched only inside a balanced bracket pair, so a stray digit run in
+# prose is not mistaken for an address.
+BRACKETED_IP_RE = re.compile(r"\[((?:\d{1,3}\.){3}\d{1,3})\]"
+                             r"|\(((?:\d{1,3}\.){3}\d{1,3})\)")
 ADDR_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# An RFC 5322 comment. Non-greedy and non-nesting, which is enough for
+# the single-level comments real MTAs write.
+COMMENT_RE = re.compile(r"\([^()]*\)")
+ENCODED_WORD_RE = re.compile(r"=\?[^?]+\?[BbQq]\?[^?]*\?=")
+# ADDR_RE backtracks quadratically on a long run with no "@"; refuse to
+# run it on anything longer than a plausible header.
+MAX_ADDR_SCAN = 4096
 # Identifiers like INV-2025-0012, ACC_99381, REF2025-0987.
 IDENT_RE = re.compile(r"\b([A-Z]{2,6})[-_ ]?(\d{3,}(?:[-_]\d+)*)\b")
 
 ZIP_LOCAL_HEADER = b"PK\x03\x04"
 ZIP_LOCAL_HEADER_LEN = 30
 ZIP_FLAG_ENCRYPTED = 0x0001
+ZIP_FLAG_DATA_DESCRIPTOR = 0x0008
+ZIP_FLAG_UTF8 = 0x0800
+ZIP_DATA_DESCRIPTOR = b"PK\x07\x08"
+# Caps so a crafted archive cannot turn a 32 MB attachment into a
+# million-entry report, or put kilobytes of binary into a filename.
+MAX_ZIP_ENTRIES = 2048
+MAX_ZIP_NAME = 512
 
 # Characters that make a string render differently from how it reads.
 BIDI_OVERRIDES = {
@@ -67,6 +87,9 @@ CONFUSABLE_SCRIPTS = ("CYRILLIC", "GREEK", "ARMENIAN")
 # A nested message can nest again; cap it so a malformed sample cannot
 # recurse without bound.
 MAX_NESTING = 5
+# Multipart nesting is separate from message/rfc822 nesting and was
+# previously unbounded.
+MAX_PART_DEPTH = 24
 
 # Brands worth impersonating. A floor, not a list: an organisation should
 # extend it with its own names and those of its suppliers and banks.
@@ -103,6 +126,23 @@ DOCUMENT_EXTS = {
 }
 ARCHIVE_TYPES = {"application/zip", "application/x-zip-compressed",
                  "application/x-rar-compressed", "application/x-7z-compressed"}
+
+
+def valid_ipv4(text: str) -> bool:
+    """Four dot-separated octets, each in range.
+
+    IP_RE's \\d{1,3} happily matches 999.888.777.666, and without this
+    check such a string is published as an indicator.
+    """
+    parts = text.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(p.isdigit() and 0 <= int(p) <= 255 and
+                   (p == "0" or not p.startswith("0") or len(p) == 1)
+                   for p in parts)
+    except ValueError:
+        return False
 
 
 def org_domain(host: str) -> str:
@@ -206,6 +246,10 @@ class Hop:
     protocol: str | None = None
     ident: str | None = None
     timestamp: datetime | None = None
+    # True when the header contained an RFC 2047 encoded word. Received is
+    # unstructured, so a decoder would expand it -- and an attacker can
+    # hide a whole fabricated hop inside one.
+    encoded_word: bool = False
 
     @property
     def summary(self) -> str:
@@ -223,6 +267,9 @@ class ArchiveEntry:
     crc32: int
     extensions: list[str] = field(default_factory=list)
     encrypted: bool = False
+    # True when read from the central directory, which is the name an
+    # extractor will actually write to disk.
+    from_central_directory: bool = False
 
     @property
     def final_ext(self) -> str:
@@ -306,7 +353,14 @@ class AuthResults:
     received_spf_ip: str | None = None
     received_spf_verifier: str | None = None
     dkim_signature_present: bool = False
+    dkim_sigs: list[dict[str, str]] = field(default_factory=list)
     arc_sets: dict[int, dict[str, str]] = field(default_factory=dict)
+    # Additional Authentication-Results headers beyond the first. A
+    # receiver prepends its own, so a second one is often the sender's
+    # forgery left in place below it.
+    extra_raw: list[str] = field(default_factory=list)
+    result_header_count: int = 0
+    duplicate_methods: set = field(default_factory=set)
 
 
 class _LinkExtractor(HTMLParser):
@@ -347,18 +401,98 @@ def _extensions(filename: str) -> list[str]:
     return [p for p in parts[1:] if p]
 
 
-def scan_zip_entries(data: bytes) -> tuple[list[ArchiveEntry], bool]:
-    """Read ZIP local file headers directly.
+def _decode_zip_name(raw: bytes, flags: int) -> str:
+    """Decode an entry name per APPNOTE 4.4.4.
 
-    ``zipfile`` needs an intact central directory, which truncated samples do
-    not have. Walking local headers still recovers the filenames, which is
-    usually the thing you actually want. Returns (entries, truncated).
+    Names are CP437 unless general-purpose bit 11 says UTF-8. Assuming
+    UTF-8 unconditionally turns every non-ASCII name into mojibake.
     """
+    if flags & ZIP_FLAG_UTF8:
+        return raw.decode("utf-8", errors="replace")
+    try:
+        return raw.decode("cp437")
+    except (UnicodeDecodeError, LookupError):
+        return raw.decode("utf-8", errors="replace")
+
+
+def _zip64_sizes(extra: bytes, csize: int, usize: int) -> tuple[int, int]:
+    """Replace 0xFFFFFFFF sentinels from the ZIP64 extra field (id 0x0001)."""
+    offset = 0
+    while offset + 4 <= len(extra):
+        header_id, size = struct.unpack_from("<HH", extra, offset)
+        body = extra[offset + 4:offset + 4 + size]
+        if header_id == 0x0001:
+            values = []
+            for i in range(0, min(len(body), 16), 8):
+                if i + 8 <= len(body):
+                    values.append(struct.unpack_from("<Q", body, i)[0])
+            # Order in the record is uncompressed then compressed, and
+            # only the fields that were sentinels are present.
+            sentinels = [usize == 0xFFFFFFFF, csize == 0xFFFFFFFF]
+            idx = 0
+            if sentinels[0] and idx < len(values):
+                usize = values[idx]
+                idx += 1
+            if sentinels[1] and idx < len(values):
+                csize = values[idx]
+            break
+        offset += 4 + size
+    return csize, usize
+
+
+def _entries_from_central_directory(data: bytes) -> list[ArchiveEntry] | None:
+    """Read the central directory, which is what real extractors use.
+
+    A ZIP can name one file in its local header and a different one in
+    the central directory. ``unzip`` writes the central directory's name
+    to disk, so reporting the local one names a file that never appears
+    and omits the one that does.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = []
+            for info in archive.infolist()[:MAX_ZIP_ENTRIES]:
+                if info.is_dir():
+                    continue
+                name = info.filename[:MAX_ZIP_NAME]
+                entries.append(ArchiveEntry(
+                    name=name,
+                    compressed_size=info.compress_size,
+                    uncompressed_size=info.file_size,
+                    crc32=info.CRC,
+                    extensions=_extensions(name),
+                    encrypted=bool(info.flag_bits & ZIP_FLAG_ENCRYPTED),
+                    from_central_directory=True,
+                ))
+            return entries
+    except (zipfile.BadZipFile, OSError, ValueError, EOFError,
+            NotImplementedError, RuntimeError):
+        return None
+
+
+def scan_zip_entries(data: bytes) -> tuple[list[ArchiveEntry], bool]:
+    """List the files inside a ZIP, tolerating damage.
+
+    Prefers the central directory, because that is what an extractor
+    reads and therefore what the recipient will actually get. Falls back
+    to walking local file headers when the directory is missing or
+    unreadable -- which is the normal state of a deliberately truncated
+    training sample, and still recovers the filenames.
+
+    Returns (entries, truncated).
+    """
+    if not data:
+        return [], False
+
+    central = _entries_from_central_directory(data)
+    if central is not None:
+        return central, False
+
     entries: list[ArchiveEntry] = []
     truncated = False
     offset = 0
 
-    while True:
+    while len(entries) < MAX_ZIP_ENTRIES:
         start = data.find(ZIP_LOCAL_HEADER, offset)
         if start < 0:
             break
@@ -371,12 +505,23 @@ def scan_zip_entries(data: bytes) -> tuple[list[ArchiveEntry], bool]:
         crc32, csize, usize = struct.unpack_from("<III", header, 14)
         name_len, extra_len = struct.unpack_from("<HH", header, 26)
 
+        # A plausible header has a plausible name length. Without this a
+        # run of PK\x03\x04 bytes inside compressed data yields entries
+        # with kilobytes of binary garbage as their "filename".
+        if name_len == 0 or name_len > MAX_ZIP_NAME:
+            offset = start + 4
+            continue
+
         name_start = start + ZIP_LOCAL_HEADER_LEN
         raw_name = data[name_start:name_start + name_len]
         if len(raw_name) < name_len:
             truncated = True
             break
-        name = raw_name.decode("utf-8", errors="replace")
+        name = _decode_zip_name(raw_name, flags)
+
+        extra = data[name_start + name_len:name_start + name_len + extra_len]
+        if csize == 0xFFFFFFFF or usize == 0xFFFFFFFF:
+            csize, usize = _zip64_sizes(extra, csize, usize)
 
         entries.append(ArchiveEntry(
             name=name,
@@ -388,13 +533,17 @@ def scan_zip_entries(data: bytes) -> tuple[list[ArchiveEntry], bool]:
         ))
 
         body_end = name_start + name_len + extra_len + csize
-        if body_end > len(data):
-            # The header promises more bytes than the file holds.
+        if flags & ZIP_FLAG_DATA_DESCRIPTOR and csize == 0:
+            # The real size lives in a trailing descriptor we cannot see
+            # from here. Skip to the next descriptor signature rather
+            # than rescanning the payload, where arbitrary bytes would
+            # otherwise be parsed as further members.
+            marker = data.find(ZIP_DATA_DESCRIPTOR, name_start + name_len)
+            body_end = marker + 16 if marker >= 0 else len(data)
+        elif body_end > len(data):
             truncated = True
             break
-        # A zero compressed size with following data means a data descriptor
-        # was used; scanning forward for the next signature still works.
-        offset = max(body_end, name_start + name_len)
+        offset = max(body_end, name_start + name_len + 1)
 
     return entries, truncated
 
@@ -418,15 +567,27 @@ class EmailDoc:
         self.raw = raw
         self.path = path
         self.depth = depth
-        self.msg: EmailMessage = email.message_from_bytes(
-            raw, policy=email.policy.default
-        )
+        # A second, undecoded view of the same bytes, built on first use.
+        # False means it could not be built.
+        self._raw_msg: object = None
+        try:
+            self.msg: EmailMessage = email.message_from_bytes(
+                raw, policy=email.policy.default
+            )
+        except RecursionError as exc:
+            # ~1000 nested multipart boundaries in 61 KB exhausts the
+            # stdlib parser's stack. RecursionError is a RuntimeError, so
+            # it escaped the CLI's handler as a traceback.
+            raise ValueError(
+                "message nesting is too deep to parse safely"
+            ) from exc
         self.headers: list[tuple[str, str]] = [
             (k, str(v)) for k, v in self.msg.items()
         ]
         self.hops: list[Hop] = self._parse_received()
         self.auth: AuthResults = self._parse_auth()
         self.bodies: dict[str, str] = {}
+        self.bad_charsets: list[str] = []
         self.attachments: list[Attachment] = []
         self.urls: list[Url] = []
         self.nested: list[EmailDoc] = self._parse_nested()
@@ -447,6 +608,28 @@ class EmailDoc:
 
     def get_all(self, name: str) -> list[str]:
         return [str(v).strip() for v in (self.msg.get_all(name) or [])]
+
+    def _raw_header_values(self, name: str) -> list[str]:
+        """Header values as written, without RFC 2047 decoding.
+
+        ``str()`` on a policy-default header decodes encoded words, and
+        for an unstructured header like Received that is a forgery
+        primitive: Q-encoding turns ``_`` into a space and supplies
+        brackets and parens, so an attacker can write an entire
+        fabricated hop -- source host and IP included -- inside a single
+        encoded word. compat32 keeps the bytes as sent, so the clause
+        parser sees what the MTA actually wrote.
+        """
+        if self._raw_msg is None:
+            try:
+                self._raw_msg = email.message_from_bytes(
+                    self.raw, policy=email.policy.compat32)
+            except Exception:  # noqa: BLE001 - fall back to the decoded view
+                self._raw_msg = False
+        if self._raw_msg is False:
+            return self.get_all(name)
+        values = self._raw_msg.get_all(name) or []
+        return [" ".join(str(v).split()) for v in values]
 
     def has_header(self, name: str) -> bool:
         return self.msg.get(name) is not None
@@ -530,7 +713,10 @@ class EmailDoc:
     def _first_addr(value: str | None) -> str:
         if not value:
             return ""
-        match = ADDR_RE.search(value)
+        # ADDR_RE backtracks quadratically over a long run containing no
+        # "@", and an empty address group routes a whole header here. A
+        # 128 KB From header took 16 seconds before this bound.
+        match = ADDR_RE.search(value[:MAX_ADDR_SCAN])
         return match.group(0) if match else ""
 
     @staticmethod
@@ -540,71 +726,166 @@ class EmailDoc:
     # -- parsing ---------------------------------------------------------
 
     def _parse_received(self) -> list[Hop]:
-        raws = self.get_all("Received")
+        # Use the undecoded header text. str() on a policy-default header
+        # RFC 2047-decodes it, and a Q-encoded word turns "_" into a space
+        # and supplies "[", "]" and "(" -- so an attacker can write an
+        # entire fabricated hop, complete with source IP, inside one
+        # encoded word in a header they control.
+        raws = self._raw_header_values("Received")
         hops: list[Hop] = []
         # File order is newest-first; transit order is the reverse.
         for index, raw in enumerate(reversed(raws)):
             flat = " ".join(raw.split())
             hop = Hop(index=index, raw=flat)
+            hop.encoded_word = bool(ENCODED_WORD_RE.search(flat))
 
-            if m := re.search(r"\bfrom\s+([^\s;()]+)", flat, re.I):
-                hop.from_host = m.group(1)
-            if m := re.search(r"\bby\s+([^\s;()]+)", flat, re.I):
-                hop.by_host = m.group(1)
-            if m := re.search(r"\bwith\s+([A-Za-z0-9/]+)", flat, re.I):
-                hop.protocol = m.group(1)
-            if m := re.search(r"\bid\s+([^\s;]+)", flat, re.I):
-                hop.ident = m.group(1)
-
-            # Prefer a bracketed IP (the real source) over any other match.
-            if m := re.search(r"[\[(](" + IP_RE.pattern.strip("\\b") + r")[\])]", flat):
-                hop.from_ip = m.group(1)
-            elif m := IP_RE.search(flat.split(" by ")[0] if " by " in flat else flat):
-                hop.from_ip = m.group(0)
-
+            # Timestamp first: it is the only part delimited by the final
+            # semicolon, and removing it keeps its digits out of the IP
+            # and clause matching below.
+            body = flat
             if ";" in flat:
+                body, _, when = flat.rpartition(";")
                 try:
-                    hop.timestamp = parsedate_to_datetime(flat.rsplit(";", 1)[1].strip())
+                    hop.timestamp = parsedate_to_datetime(when.strip())
                 except (TypeError, ValueError, IndexError):
                     hop.timestamp = None
 
+            # Comments carry prose an MTA wrote about the hop; matching
+            # clauses inside them yields the wrong host ("authenticated by
+            # smtp-auth" -> by_host='smtp-auth') and the wrong IP (the
+            # receiver's own interface). Keep them for the IP of the from
+            # clause, which conventionally lives in the first comment, but
+            # match the clauses themselves against comment-free text.
+            bare = COMMENT_RE.sub(" ", body)
+            comments = COMMENT_RE.findall(body)
+
+            if m := re.search(r"\bfrom\s+([^\s;()]+)", bare, re.I):
+                candidate = m.group(1)
+                # "from" must introduce a HELO name, not appear as part of
+                # "envelope-from" or similar.
+                if not candidate.startswith("<"):
+                    hop.from_host = candidate
+            if m := re.search(r"\bby\s+([^\s;()]+)", bare, re.I):
+                hop.by_host = m.group(1)
+            if m := re.search(r"\bwith\s+([A-Za-z0-9/]+)", bare, re.I):
+                hop.protocol = m.group(1)
+            if m := re.search(r"\bid\s+([^\s;]+)", bare, re.I):
+                hop.ident = m.group(1)
+
+            hop.from_ip = self._hop_source_ip(body, comments)
             hops.append(hop)
         return hops
+
+    @staticmethod
+    def _hop_source_ip(body: str, comments: list[str]) -> str | None:
+        """The connecting client's address, not the receiver's.
+
+        Scoped to the text before the ``by`` clause: an address appearing
+        after it belongs to the receiving side, and reporting that as the
+        source puts the wrong IP in the IOC list.
+        """
+        source_part = re.split(r"\bby\b", body, maxsplit=1, flags=re.I)[0]
+        for match in BRACKETED_IP_RE.finditer(source_part):
+            candidate = match.group(1) or match.group(2)
+            if candidate and valid_ipv4(candidate):
+                return candidate
+        # Some MTAs put the address in the first comment without brackets.
+        for comment in comments[:1]:
+            for candidate in IP_RE.findall(comment):
+                if valid_ipv4(candidate):
+                    return candidate
+        for candidate in IP_RE.findall(source_part):
+            if valid_ipv4(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _fill_auth_results(auth: AuthResults, raw: str) -> None:
+        """Read an Authentication-Results header section by section.
+
+        RFC 8601 structures this header as an authserv-id followed by
+        semicolon-separated resinfo sections, each one method, result and
+        properties. Searching the whole string for ``spf=`` instead finds
+        whichever match comes first -- and Gmail restates every inner
+        verdict inside its leading ``arc=pass (...)`` comment, so a
+        message whose real results are all failures reads as all passes.
+        Parse per section, with comments removed, and keep the method and
+        its properties together.
+        """
+        sections = [s.strip() for s in COMMENT_RE.sub(" ", raw).split(";")]
+        sections = [s for s in sections if s]
+        if not sections:
+            return
+
+        # A real authserv-id is a bare token before the first ';'.
+        if "=" not in sections[0]:
+            auth.authserv_id = sections[0].split()[0]
+            sections = sections[1:]
+
+        for section in sections:
+            m = re.match(r"(\w+)\s*=\s*(\w+)", section)
+            if m is None:
+                continue
+            method, result = m.group(1).lower(), m.group(2).lower()
+            if method not in ("spf", "dkim", "dmarc"):
+                continue
+            # First section for a method wins; a later duplicate is
+            # recorded rather than allowed to overwrite it.
+            if getattr(auth, method) is not None:
+                auth.duplicate_methods.add(method)
+                continue
+            setattr(auth, method, result)
+
+            # Properties are scoped to this section, so the verdict and
+            # the identity it applies to can never come from different
+            # mechanisms.
+            if method == "spf":
+                if p := re.search(r"smtp\.mailfrom=([^\s;]+)", section, re.I):
+                    auth.spf_domain = p.group(1).split("@")[-1].lower()
+                elif p := re.search(r"smtp\.helo=([^\s;]+)", section, re.I):
+                    auth.spf_domain = p.group(1).lower()
+            elif method == "dkim":
+                if p := re.search(r"header\.d=([^\s;]+)", section, re.I):
+                    auth.dkim_domain = p.group(1).lower()
+            elif method == "dmarc" and (
+                    p := re.search(r"header\.from=([^\s;]+)", section, re.I)):
+                auth.dmarc_domain = p.group(1).split("@")[-1].lower()
 
     def _parse_auth(self) -> AuthResults:
         auth = AuthResults()
         auth.dkim_signature_present = self.has_header("DKIM-Signature")
+        auth.dkim_sigs = [
+            _parse_tag_list(" ".join(v.split()))
+            for v in self.get_all("DKIM-Signature")
+        ]
 
-        raw = self.get("Authentication-Results")
-        if raw:
-            auth.raw = " ".join(raw.split())
-            first = auth.raw.split(";")[0].strip()
-            # A real authserv-id is a bare token before the first ';'.
-            if first and "=" not in first:
-                auth.authserv_id = first
-            for method in ("spf", "dkim", "dmarc"):
-                m = re.search(rf"\b{method}=(\w+)", auth.raw, re.I)
-                if m:
-                    setattr(auth, method, m.group(1).lower())
-            # The identity each mechanism authenticated.
-            if m := re.search(r"smtp\.mailfrom=([^\s;]+)", auth.raw, re.I):
-                auth.spf_domain = m.group(1).strip().split("@")[-1].lower()
-            elif m := re.search(r"smtp\.helo=([^\s;]+)", auth.raw, re.I):
-                auth.spf_domain = m.group(1).strip().lower()
-            if m := re.search(r"header\.d=([^\s;]+)", auth.raw, re.I):
-                auth.dkim_domain = m.group(1).strip().lower()
-            if m := re.search(r"header\.from=([^\s;]+)", auth.raw, re.I):
-                auth.dmarc_domain = m.group(1).strip().split("@")[-1].lower()
+        all_results = self.get_all("Authentication-Results")
+        auth.result_header_count = len(all_results)
+        if all_results:
+            auth.raw = " ".join(all_results[0].split())
+            auth.extra_raw = [" ".join(v.split()) for v in all_results[1:]]
+            self._fill_auth_results(auth, auth.raw)
 
         spf_raw = self.get("Received-SPF")
         if spf_raw:
             flat = " ".join(spf_raw.split())
-            m = re.match(r"\s*(\w+)", flat)
-            if m:
+            bare = COMMENT_RE.sub(" ", flat)
+            if m := re.search(r"\b(pass|fail|softfail|neutral|none|"
+                              r"temperror|permerror)\b", bare, re.I):
                 auth.received_spf_result = m.group(1).lower()
-            if ip := IP_RE.search(flat):
-                auth.received_spf_ip = ip.group(0)
-            if v := re.search(r"\(([^\s:]+):", flat):
+            # client-ip= is the address the check was actually run against.
+            # Prose inside the comment often names a *different* address
+            # ("192.0.2.1 is not permitted to send mail"), and taking that
+            # one publishes the wrong source IOC.
+            m = re.search(r"client-ip=([0-9.]+)", flat, re.I)
+            if m and valid_ipv4(m.group(1)):
+                auth.received_spf_ip = m.group(1)
+            if auth.received_spf_ip is None:
+                for candidate in IP_RE.findall(flat):
+                    if valid_ipv4(candidate):
+                        auth.received_spf_ip = candidate
+                        break
+            if v := re.search(r"\(([^\s:()]+):", flat):
                 auth.received_spf_verifier = v.group(1)
 
         for header in ("ARC-Seal", "ARC-Message-Signature",
@@ -633,12 +914,17 @@ class EmailDoc:
         the employee who reported it -- so every finding is attributed to
         the wrong message.
         """
+        return self._walk_parts(msg, 0)
+
+    def _walk_parts(self, msg, depth: int) -> list:
+        if depth > MAX_PART_DEPTH:
+            return []
         if msg.get_content_maintype() == "multipart":
             parts = []
             payload = msg.get_payload()
             if isinstance(payload, list):
                 for sub in payload:
-                    parts.extend(self._own_parts(sub))
+                    parts.extend(self._walk_parts(sub, depth + 1))
             return parts
         return [msg]
 
@@ -681,6 +967,19 @@ class EmailDoc:
 
             if filename or disposition == "attachment":
                 data = part.get_payload(decode=True) or b""
+                if not data and part.get_content_maintype() == "message":
+                    # get_payload(decode=True) returns None for message/*,
+                    # which made the most important artifact in a
+                    # forwarded report show 0 bytes and the hash of the
+                    # empty string.
+                    inner = part.get_payload()
+                    if isinstance(inner, list) and inner:
+                        inner = inner[0]
+                    if hasattr(inner, "as_bytes"):
+                        try:
+                            data = inner.as_bytes()
+                        except (ValueError, TypeError, UnicodeEncodeError):
+                            data = b""
                 att = Attachment(
                     filename=filename or "(unnamed)",
                     content_type=ctype,
@@ -697,8 +996,13 @@ class EmailDoc:
             charset = part.get_content_charset() or "utf-8"
             try:
                 text = payload.decode(charset, errors="replace")
-            except LookupError:
+            except (LookupError, ValueError, UnicodeError):
+                # An attacker-supplied charset can be unknown, contain a
+                # NUL, or name a non-text codec. Any of those used to
+                # abort the whole parse, which is a cheap way to make a
+                # phish unanalysable by the tool meant to analyse it.
                 text = payload.decode("utf-8", errors="replace")
+                self.bad_charsets.append(charset)
             self.bodies[ctype] = self.bodies.get(ctype, "") + text
 
         self.urls = self._extract_urls()
