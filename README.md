@@ -1,6 +1,8 @@
 # franking
 
-An interactive analysis lens for suspicious `.eml` files.
+An interactive analysis lens for suspicious `.eml` files — built for CTF
+and training work, where you need the right answer *and* the reason behind
+it.
 
 > A *franking mark* is the postmark that proves postage was genuinely paid.
 > Forging one has been a crime since the penny post. This tool asks the same
@@ -11,7 +13,7 @@ what is wrong. franking does the cross-referencing: it checks claimed
 authentication results against the rest of the message, compares what a link
 says against where it goes, and looks inside archives at what is actually
 being delivered. Then it tells you *why* each answer matters, not just what
-it is.
+it is — which is the part worth keeping once the exercise is over.
 
 ```
   email.eml  Urgent: Invoice Payment Required - Overdue Notice
@@ -104,6 +106,32 @@ for f in samples/*.eml; do
   franking "$f" --findings --no-color --min-severity high || echo "FLAGGED: $f"
 done
 ```
+
+### Working a challenge
+
+Most email forensics exercises ask the same handful of questions — sender,
+originating IP, which relay, the link domain, the attachment name, its
+SHA-256, the file hidden inside it, the ATT&CK techniques. `--iocs` answers
+nearly all of them in one screen:
+
+```
+$ franking email.eml --iocs
+Sender            finance@business-finance.com
+Reply-To          support@business-finance.com
+Originating IP    45.67.89.10
+Relay IP          203.0.113.25
+URL               https://secure.business-finance.com/invoice/...
+Domain            secure.business-finance.com
+Attachment        Invoice_2025_Payment.zip
+SHA-256           8379c41239e9af845b2ab6c27a7509ae8804d7d73e455c800a551b22ba25bb4a
+Archived file     invoice_document.pdf.bat
+MITRE techniques  T1036.007, T1204.002, T1566, T1566.001, T1566.002, T1656
+```
+
+Open the TUI when you want to paste exact values into a form — `a` copies
+that whole list, `y` copies whichever row the cursor is on, `H` grabs the
+SHA-256 from anywhere. Then read the Findings section for *why*, which is
+the part that carries over to the next one.
 
 ### Keys
 
@@ -204,31 +232,30 @@ samples, it works offline, and no sample ever leaves the host. For an
 organisation that cannot upload mail to a cloud service, that is the
 point of it rather than a limitation.
 
-What it is: an analyst's lens on **one message**, that shows its working.
-What it is not: a mail security platform. It has no ingestion pipeline, no
-reputation feeds and no case management, and it is not trying to replace
-the gateway.
+It is a lens on **one message** that shows its working. It is not a mail
+security platform, has no ingestion pipeline, reputation feeds or case
+management, and is not trying to replace a gateway. The rules are real
+rather than exercise-shaped — everything here fires on live phishing too —
+but the tool is built for sitting down with a single sample.
 
-Known gaps, stated plainly so nobody discovers them the hard way:
+Known gaps, so nobody finds them the hard way:
 
-- **No Outlook `.msg`** — only RFC 822 `.eml`.
+- **No Outlook `.msg`** — RFC 822 `.eml` only.
 - **No live verification.** Whether a domain's SPF record really authorises
-  an address, how old the domain is, and what any reputation service thinks
+  an address, how old the domain is, what any reputation service thinks:
   all need the network. Domain age in particular is among the strongest
-  signals available, and franking cannot see it.
+  signals there is, and franking cannot see it.
 - **Shallow attachment analysis.** Extension chains, magic bytes and archive
-  listings only. No Office macro or VBA inspection, no remote template
-  injection, no PDF `/OpenAction` or `/JavaScript`, no HTML smuggling, no
-  QR codes in images.
-- **Weak against pure-text BEC.** The rules key on attachments and links. A
-  message with neither — "are you at your desk? I need a wire sent" — scores
-  low. Catching those needs a roster of who may legitimately send as whom,
-  which is configuration that does not exist yet. For the same reason,
-  `CONT008` only reports display-name impersonation it can prove: a brand
-  name, or an address hidden inside the display name. It will not guess
-  that an unfamiliar company name is a lie.
-- **No team workflow.** No MISP or STIX export, no campaign clustering, no
-  audit trail.
+  listings. No Office macro or VBA inspection, no remote template injection,
+  no PDF `/OpenAction` or `/JavaScript`, no HTML smuggling, no QR codes.
+- **Weak against pure-text BEC.** The rules key on attachments and links, so
+  a message with neither — "are you at your desk? I need a wire sent" —
+  scores low. Catching those needs a roster of who may legitimately send as
+  whom, which is configuration this tool deliberately does not have. For the
+  same reason `CONT008` reports only impersonation it can prove: a brand
+  name, or an address hidden inside the display name. It will not guess that
+  an unfamiliar company name is a lie, because guessing means accusing real
+  senders.
 
 ## Licence
 
