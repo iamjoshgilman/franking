@@ -13,7 +13,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -71,14 +71,16 @@ class PhishLensApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "help", "Help", key_display="?"),
-        Binding("y", "copy_value", "Copy value"),
+        Binding("y", "copy_value", "Copy"),
         Binding("Y", "copy_section", "Copy section"),
         Binding("a", "copy_iocs", "Copy IOCs"),
+        Binding("H", "copy_hash", "Copy SHA-256"),
         Binding("e", "export", "Export JSON"),
         Binding("slash", "search", "Search", key_display="/"),
         Binding("f", "goto_findings", "Findings"),
         Binding("escape", "dismiss_search", "", show=False),
-        Binding("tab", "focus_next_pane", "", show=False),
+        # priority, or Textual's own focus walk claims tab first.
+        Binding("tab", "focus_next_pane", "", show=False, priority=True),
         Binding("j", "cursor_down", "", show=False),
         Binding("k", "cursor_up", "", show=False),
         Binding("l", "descend", "", show=False),
@@ -106,13 +108,21 @@ class PhishLensApp(App):
         with Horizontal(id="columns"):
             yield OptionList(id="spine")
             yield OptionList(id="items")
-            with VerticalScroll(id="detail-wrap"):
-                yield Static(Text(""), id="detail")
+            with Vertical(id="detail-wrap"):
+                with VerticalScroll(id="detail-scroll"):
+                    yield Static(Text(""), id="detail")
+                # The fields of the selected row, as their own cursor. The
+                # values people actually want to copy -- hashes, IPs, URLs --
+                # live here, so this pane has to be reachable.
+                yield OptionList(id="fields")
         yield Input(placeholder="search labels and values…", id="search")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#search", Input).display = False
+        # The prose is read, not driven; keeping it out of the focus chain
+        # means tab only ever lands on the three real columns.
+        self.query_one("#detail-scroll", VerticalScroll).can_focus = False
         self._rebuild()
         # Widths are zero until the first layout pass, so rebuild the rows
         # once real sizes exist, otherwise long labels wrap.
@@ -123,7 +133,7 @@ class PhishLensApp(App):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        """Re-render both lists against the current column widths."""
+        """Re-render every list against the current column widths."""
         keep = self.query_one("#items", OptionList).highlighted or 0
         self._refresh_spine()
         self._refresh_items(keep=keep)
@@ -170,9 +180,35 @@ class PhishLensApp(App):
 
     @property
     def selected(self) -> Node | None:
-        items = self.query_one("#items", OptionList)
-        index = items.highlighted
-        children = self.current_container.children
+        """The row highlighted in the middle column."""
+        return self._pick(self.query_one("#items", OptionList),
+                          self.current_container.children)
+
+    @property
+    def selected_field(self) -> Node | None:
+        """The row highlighted in the detail column."""
+        node = self.selected
+        if node is None:
+            return None
+        return self._pick(self.query_one("#fields", OptionList), node.children)
+
+    @property
+    def focused_node(self) -> Node | None:
+        """Whatever the focused pane is pointing at.
+
+        This is what ``y`` copies, so the key does the same thing in every
+        pane rather than silently meaning "the attachment" when the cursor
+        is on its hash.
+        """
+        if self.query_one("#fields", OptionList).has_focus:
+            return self.selected_field or self.selected
+        if self.query_one("#spine", OptionList).has_focus:
+            return self.current_container
+        return self.selected
+
+    @staticmethod
+    def _pick(widget: OptionList, children: list[Node]) -> Node | None:
+        index = widget.highlighted
         if index is None or not (0 <= index < len(children)):
             return None
         return children[index]
@@ -191,6 +227,16 @@ class PhishLensApp(App):
 
     def _refresh_detail(self) -> None:
         node = self.selected
+        self._render_prose(node)
+        self._refresh_fields(node)
+
+    def _render_prose(self, node: Node | None) -> None:
+        """Describe one node above the field list.
+
+        When the field cursor is active this describes the selected *field*,
+        so a value too wide for the narrow list -- a SHA-256, a long URL --
+        is always readable in full somewhere on screen.
+        """
         detail = self.query_one("#detail", Static)
         if node is None:
             detail.update(Text("nothing selected", style="#7a8290"))
@@ -215,17 +261,21 @@ class PhishLensApp(App):
             text.append(node.note + "\n", style="#c8ccd4")
             text.append("\n")
 
-        if node.children:
-            text.append("contains\n", style="#7a8290")
-            width = max(len(c.label) for c in node.children)
-            for child in node.children:
-                text.append("  " + child.label.ljust(width) + "  ",
-                            style="#7a8290")
-                value = (child.value or "").replace("\n", " ")
-                text.append(value[:120] + ("…" if len(value) > 120 else "") + "\n",
-                            style="#e8eaed")
-
         detail.update(text)
+
+    def _refresh_fields(self, node: Node | None) -> None:
+        """Fill the detail column with the selected row's fields."""
+        fields = self.query_one("#fields", OptionList)
+        fields.clear_options()
+        if node is None or not node.children:
+            fields.display = False
+            return
+        fields.display = True
+        width = self._usable_width(fields, 44)
+        fields.add_options([Option(_row(c, width), id=str(i))
+                            for i, c in enumerate(node.children)])
+        fields.highlighted = 0
+        fields.border_title = f"{node.label} · fields"
 
     # -- events ----------------------------------------------------------
 
@@ -239,6 +289,17 @@ class PhishLensApp(App):
                 self._refresh_items()
         elif event.option_list.id == "items":
             self._refresh_detail()
+        elif event.option_list.id == "fields" and event.option_list.has_focus:
+            # Only once the field cursor is in use; repopulating the list
+            # also fires this, and that must not clobber the row's own prose.
+            self._render_prose(self.selected_field or self.selected)
+
+    def on_descendant_focus(self, event) -> None:
+        widget_id = getattr(event.widget, "id", None)
+        if widget_id == "fields":
+            self._render_prose(self.selected_field or self.selected)
+        elif widget_id == "items":
+            self._render_prose(self.selected)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip().lower()
@@ -269,10 +330,17 @@ class PhishLensApp(App):
 
     # -- actions ---------------------------------------------------------
 
+    def _panes(self) -> list[OptionList]:
+        return [
+            self.query_one("#spine", OptionList),
+            self.query_one("#items", OptionList),
+            self.query_one("#fields", OptionList),
+        ]
+
     def action_focus_next_pane(self) -> None:
-        spine = self.query_one("#spine", OptionList)
-        items = self.query_one("#items", OptionList)
-        (items if spine.has_focus else spine).focus()
+        panes = [p for p in self._panes() if p.display]
+        current = next((i for i, p in enumerate(panes) if p.has_focus), -1)
+        panes[(current + 1) % len(panes)].focus()
 
     def action_cursor_down(self) -> None:
         self._focused_list().action_cursor_down()
@@ -281,40 +349,92 @@ class PhishLensApp(App):
         self._focused_list().action_cursor_up()
 
     def _focused_list(self) -> OptionList:
-        spine = self.query_one("#spine", OptionList)
-        return spine if spine.has_focus else self.query_one("#items", OptionList)
+        for pane in self._panes():
+            if pane.has_focus:
+                return pane
+        return self.query_one("#items", OptionList)
 
     def action_descend(self) -> None:
-        spine = self.query_one("#spine", OptionList)
+        """Move rightwards: spine -> items -> fields, then re-root."""
+        spine, items, fields = self._panes()
         if spine.has_focus:
-            self.query_one("#items", OptionList).focus()
+            items.focus()
             return
-        node = self.selected
-        if node is None or not node.children:
+        if items.has_focus:
+            node = self.selected
+            if node is not None and node.children:
+                fields.focus()
             return
-        self.stack.append(node)
-        self._refresh_items()
+        # Already in the detail column. If this field has detail of its own,
+        # promote its parent to the middle column so the field becomes the
+        # selected row and its children fill the detail pane in turn.
+        field = self.selected_field
+        parent = self.selected
+        if field is None or parent is None or not field.children:
+            return
+        index = parent.children.index(field)
+        self.stack.append(parent)
+        self._refresh_items(keep=index)
+        fields.focus()
 
     def action_ascend(self) -> None:
+        spine, items, fields = self._panes()
+        if fields.has_focus:
+            items.focus()
+            return
         if len(self.stack) > 1:
             child = self.stack.pop()
             parent_children = self.current_container.children
             index = parent_children.index(child) if child in parent_children else 0
             self._refresh_items(keep=index)
+            items.focus()
         else:
-            self.query_one("#spine", OptionList).focus()
+            spine.focus()
+
+    def _copy(self, value: str, what: str = "") -> None:
+        ok, how = clipboard.copy(value)
+        if not ok:
+            self.notify(f"copy failed: {how}", severity="error")
+            return
+        preview = value if len(value) <= 48 else value[:45] + "…"
+        self.notify(f"copied {what}{preview}", title=how)
 
     def action_copy_value(self) -> None:
-        node = self.selected
+        node = self.focused_node
         if node is None:
             return
-        value = node.value or node.label
-        ok, how = clipboard.copy(value)
-        preview = value if len(value) <= 48 else value[:45] + "…"
-        if ok:
-            self.notify(f"copied via {how}: {preview}")
-        else:
-            self.notify(f"copy failed: {how}", severity="error")
+        self._copy(node.value or node.label)
+
+    def action_copy_hash(self) -> None:
+        """Copy the SHA-256 of the attachment in context.
+
+        Hashes are the most-copied value in the whole tool and the most
+        painful to retype, so they get a key of their own that works from
+        anywhere in an attachment's subtree.
+        """
+        hashes = [
+            node.value for node in self._context_nodes()
+            if node.label == "SHA-256" and node.value
+        ]
+        if not hashes:
+            if len(self.doc.attachments) == 1:
+                self._copy(self.doc.attachments[0].sha256, "SHA-256: ")
+                return
+            self.notify("no SHA-256 in context; open an attachment first",
+                        severity="warning")
+            return
+        self._copy(hashes[0], "SHA-256: ")
+
+    def _context_nodes(self) -> list[Node]:
+        """The selection and everything around it, nearest first."""
+        nodes: list[Node] = []
+        for candidate in (self.selected_field, self.selected,
+                          *reversed(self.stack)):
+            if candidate is None:
+                continue
+            nodes.append(candidate)
+            nodes.extend(candidate.children)
+        return nodes
 
     def action_copy_section(self) -> None:
         container = self.current_container
@@ -373,11 +493,13 @@ class PhishLensApp(App):
 
     def action_help(self) -> None:
         self.notify(
-            "j/k move  l/↵ descend  h ascend  tab switch pane\n"
-            "y copy value  Y copy section  a copy all IOCs\n"
-            "/ search  f findings  e export JSON  q quit",
+            "j/k move  l/↵ right  h/⌫ left  tab cycle panes\n"
+            "y copy the highlighted row, in whichever pane has focus\n"
+            "H copy SHA-256  Y copy section  a copy all IOCs\n"
+            "/ search  f findings  e export JSON  q quit\n"
+            "shift+drag to select text with the mouse",
             title="keys",
-            timeout=12,
+            timeout=15,
         )
 
 

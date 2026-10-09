@@ -26,6 +26,9 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 phishlens = "phishlens.cli:main"
+# Short alias: these challenges are called "Sherlocks" on Hack The Box,
+# which is what the tool mostly gets pointed at.
+sherlock = "phishlens.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/iamjoshgilman/phishlens"

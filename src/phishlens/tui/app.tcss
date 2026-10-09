@@ -70,12 +70,38 @@ OptionList:focus > .option-list--option-highlighted {
     width: 3fr;
     min-width: 30;
     background: $pl-panel;
+}
+
+/* Sized to its content so the field list sits directly beneath the prose
+ * instead of being pushed to the floor of the pane. */
+#detail-scroll {
+    height: auto;
+    max-height: 55%;
     padding: 1 2;
     scrollbar-size-vertical: 1;
 }
 
 #detail {
     width: 100%;
+}
+
+/* The field cursor. Capped so a long attachment never pushes the
+ * explanation off the top of the pane. */
+#fields {
+    height: 1fr;
+    background: $pl-panel;
+    border: none;
+    border-top: solid $pl-edge;
+    border-right: none;
+    padding: 0 1;
+}
+
+#fields:focus {
+    border-top: solid $pl-accent;
+}
+
+#fields.-empty {
+    display: none;
 }
 
 #search {

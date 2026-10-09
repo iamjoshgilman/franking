@@ -69,6 +69,9 @@ phishlens message.eml --json       # everything, machine-readable
 phishlens message.eml --tree       # section outline
 ```
 
+The command also installs as `sherlock`, after what Hack The Box calls
+these challenges.
+
 `--findings` exits non-zero when anything high or critical fired, so it drops
 straight into a pipeline:
 
@@ -80,24 +83,39 @@ done
 
 ### Keys
 
+There are three columns — sections, rows, and the selected row's fields —
+and the cursor moves between them rightwards.
+
 | Key | Action |
 | --- | --- |
-| `j` / `k` | move |
-| `l` / `→` / `⏎` | descend |
-| `h` / `←` / `⌫` | ascend |
-| `tab` | switch pane |
-| `y` | copy the selected value |
-| `Y` | copy the whole section |
+| `j` / `k` | move within the focused column |
+| `l` / `→` / `⏎` | move right: sections → rows → fields |
+| `h` / `←` / `⌫` | move back left |
+| `tab` | cycle the three columns |
+| `y` | copy the highlighted row, in whichever column has focus |
+| `H` | copy the SHA-256 in context |
+| `Y` | copy every row of the current section |
 | `a` | copy every extracted indicator |
 | `/` | search labels, values and explanations |
 | `f` | jump to Findings |
 | `e` | export JSON next to the file |
 | `?` | help |
 
-`y` is the one to remember. Hashes and URLs are what you actually need out of
-the tool, and retyping a SHA-256 is nobody's idea of analysis. Clipboard
-writes go through `wl-copy`, `xclip`, `xsel`, `pbcopy` or `clip.exe`,
-whichever exists, and fall back to OSC 52 so it still works over SSH.
+`y` is the one to remember, and it copies **what the focused column points
+at** — put the cursor on a row's `SHA-256` field and `y` gives you the hash,
+not the attachment's name. Values too wide for the field list are shown in
+full in the pane above it, so a 64-character hash stays readable even when
+the column clips it.
+
+Clipboard writes go through `wl-copy`, `xclip`, `xsel`, `pbcopy` or
+`clip.exe`, whichever exists, and fall back to OSC 52 so `y` still works
+over SSH.
+
+Selecting text with the mouse needs **shift+drag**. Like any TUI, phishlens
+puts the terminal into mouse-tracking mode, so a plain drag is delivered to
+the application rather than the terminal; shift bypasses that in Ghostty,
+Alacritty, kitty and foot. Clicking a row also selects it, so you can click
+then press `y`.
 
 ## What it looks at
 
