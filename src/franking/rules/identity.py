@@ -387,8 +387,10 @@ def thread_hijack(doc, emit):
                     ],
                 )
 
+    remainder = REPLY_PREFIX_RE.sub("", doc.subject).strip()
     if (REPLY_PREFIX_RE.match(doc.subject) and not references.strip()
-            and not is_bulk(doc)):
+            and not is_bulk(doc) and len(remainder) > 3
+            and "@" not in remainder):
         return emit(
             f"The subject is formatted as a reply ({doc.subject!r}) but the "
             f"message carries no In-Reply-To or References header, so there "
@@ -412,9 +414,14 @@ def _is_near_miss(candidate: str, target: str) -> bool:
     from franking.parse import edit_distance
 
     c_stem, t_stem = candidate.split(".")[0], target.split(".")[0]
-    if len(t_stem) < 4:
+    if len(t_stem) < 5 or len(c_stem) < 5:
         return False
-    if skeleton(c_stem) == skeleton(t_stem):
-        return True
-    distance = edit_distance(c_stem, t_stem)
-    return distance <= 2 and abs(len(c_stem) - len(t_stem)) <= 2
+    # Same name under a different suffix is one organisation, not an
+    # impersonation: linux.ie and linux.local are the same people.
+    if c_stem == t_stem or skeleton(c_stem) == skeleton(t_stem):
+        return False
+    # One edit per five characters, as elsewhere -- short names are
+    # close to everything.
+    allowed = max(1, len(t_stem) // 5)
+    return (edit_distance(c_stem, t_stem) <= allowed
+            and abs(len(c_stem) - len(t_stem)) <= 1)

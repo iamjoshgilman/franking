@@ -56,8 +56,36 @@ something else in the file*:
   cannot read it, the recipient can.
 
 No parser flags a *missing* header, and none of these fall out of a field
-dump. franking encodes 35 of these checks as rules, each one explaining its
+dump. franking encodes 41 of these checks as rules, each one explaining its
 own reasoning and tagged with the relevant MITRE ATT&CK technique.
+
+## Measured, not asserted
+
+Rules are calibrated against real mail rather than intuition, because
+intuition was wrong in both directions. Current numbers over 4,400
+legitimate messages (SpamAssassin ham corpus) and 4,000 real phishing
+samples (Phishing Pot):
+
+| | legitimate mail | real phishing |
+| --- | --- | --- |
+| produces a finding at >= medium | **2.1%** | **67.5%** |
+| crashes | 0 | 0 |
+
+Reproduce with `python tools/corpus.py ham <dir>` and
+`python tools/corpus.py phish <dir>`, which report the rate per rule so
+a noisy rule is visible rather than averaged away.
+
+Measurement changed the rule set substantially. `ROUTE003` (Received
+timestamps out of order) fired on 20% of legitimate mail: backwards
+steps between relays turn out to have a p50 of 89 seconds, a p90 of 17
+minutes and a p99 of **three hours**, so clock skew is the norm and only
+an inversion larger than a day means anything. `CONT008`'s original
+heuristic -- the display name shares no word with the sending domain --
+fires on 81% of legitimate mail against 77% of phishing, which is worse
+than a coin toss; it was replaced with checks that can be proven.
+Conversely, a sender on a free cloud tenant domain
+(`*.onmicrosoft.com` and friends) appears in 24% of real phishing, and
+an algorithmically generated sender domain in 10%.
 
 ## Forwarded reports
 

@@ -90,6 +90,7 @@ from franking.rules import (  # noqa: E402,F401
     content,
     identity,
     routing,
+    sender,
 )
 
 __all__ = ["rule", "run_all", "registered_ids", "Evidence", "Severity"]

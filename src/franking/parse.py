@@ -1059,6 +1059,9 @@ class EmailDoc:
         out = []
         for match in IDENT_RE.finditer(text):
             full = match.group(0)
-            digits = re.sub(r"[^0-9]", "", match.group(2))
+            # Strip separators *and* leading zeros: JSR-000152 and JSR152
+            # are one identifier written two ways, and comparing them
+            # naively reports a mismatch on legitimate mail.
+            digits = re.sub(r"[^0-9]", "", match.group(2)).lstrip("0") or "0"
             out.append((full, match.group(1).upper(), digits))
         return out

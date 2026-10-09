@@ -165,7 +165,13 @@ def skeleton(text: str) -> str:
 
 
 def resembles_brand(label: str, max_distance: int = 1) -> tuple[str, int] | None:
-    """Does a label reduce to something that looks like a known brand?"""
+    """Does a label reduce to something that looks like a known brand?
+
+    The allowance scales with the brand's length. Two edits on a
+    three-letter name like "ups" reaches a large share of all English
+    words -- it matched "ucsc" in real university mail -- so a short
+    stem has to match much more closely than a long one.
+    """
     reduced = skeleton(label)
     if not reduced or len(reduced) < 4:
         return None
@@ -174,8 +180,12 @@ def resembles_brand(label: str, max_distance: int = 1) -> tuple[str, int] | None
         stem = target.split(".")[0]
         if abs(len(reduced) - len(stem)) > 1:
             continue
+        # One edit per five characters of brand name, capped by the
+        # caller's ceiling. "ups" and "dhl" therefore require an exact
+        # match; "microsoft" tolerates two.
+        allowed = min(max_distance, max(0, len(stem) // 5))
         distance = edit_distance(reduced, stem)
-        if distance <= max_distance and (best is None or distance < best[1]):
+        if distance <= allowed and (best is None or distance < best[1]):
             best = (target, distance)
     return best
 

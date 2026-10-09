@@ -17,6 +17,7 @@ from franking.rules._context import (
     is_autoreply,
     is_bounce,
     is_bulk,
+    is_forwarded,
     same_org,
 )
 
@@ -60,6 +61,11 @@ def _anchor_hostname(anchor: str) -> str | None:
     """
     text = anchor.strip().strip("<>\u201c\u201d\"'")
     if " " in text or "@" in text or not PLAUSIBLE_TLD_RE.match(text):
+        return None
+    # Only a full URL claims a destination. Newsletters routinely use an
+    # advertiser's bare company name ("HostJ2EE.com") as link text while
+    # the href is the list's click tracker, and that is not deception.
+    if not text.lower().startswith(("http://", "https://", "www.")):
         return None
     host = (text.split("://")[-1].split("/")[0].split("?")[0]
             .split("#")[0].lower())
@@ -301,8 +307,19 @@ def display_name_impersonation(doc, emit):
     # "author@their.domain (via the list)" when the author's domain
     # publishes p=reject. The named sender really did write it, so
     # reporting it as impersonation is exactly backwards.
-    claimed = ADDR_RE.search(display) or DOMAIN_IN_TEXT_RE.search(display)
-    if claimed and is_bulk(doc):
+    # Only when the display name is *entirely* an address or domain. A
+    # name that merely contains a dotted word -- "CNET News.com Daily
+    # Dispatch" -- is prose, and matching inside it made a real
+    # newsletter the single largest false positive in the corpus.
+    stripped = display.strip().strip("<>\"'")
+    claimed = (ADDR_RE.fullmatch(stripped)
+               or DOMAIN_IN_TEXT_RE.fullmatch(stripped))
+    # Forwarding and list software rewrites the display name to carry the
+    # original sender, usually with an annotation in brackets or after a
+    # slash. That is a provenance note, not an impersonation.
+    if claimed and (is_bulk(doc) or is_forwarded(doc)
+                    or any(mark in display for mark in "[]()/|")
+                    or " via " in display.lower()):
         claimed = None
     if claimed:
         claimed_domain = claimed.group(0).split("@")[-1].lower().strip(".")

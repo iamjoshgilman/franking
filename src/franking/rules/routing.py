@@ -15,9 +15,14 @@ from franking.parse import ADDR_RE, classify_ip
 from franking.rules import rule
 from franking.rules._context import is_autoreply, is_bulk, same_org
 
-# Relays are not perfectly synchronised; only a gap too large for
-# NTP drift is evidence of a fabricated header.
-SKEW_TOLERANCE_SECONDS = 120
+# Measured over 4,400 messages of the SpamAssassin ham corpus, which
+# contained 2,045 backwards steps between consecutive hops: p50 89s,
+# p90 17 minutes, p99 3 hours, maximum 15.3 hours. Relay clocks and
+# timezone configuration in the real world are far worse than intuition
+# suggests, so a backwards step is only evidence of forgery when it is
+# larger than anything legitimate infrastructure produced.
+SKEW_TOLERANCE_SECONDS = 3600
+IMPLAUSIBLE_SKEW_SECONDS = 24 * 3600
 
 
 def _describe(seconds: float) -> str:
@@ -58,7 +63,7 @@ def spf_ip_not_in_chain(doc, emit):
 @rule(
     "ROUTE002",
     "Received header names an email address as its source host",
-    Severity.MEDIUM,
+    Severity.LOW,
     mitre=["T1656"],
 )
 def received_from_is_address(doc, emit):
@@ -67,10 +72,13 @@ def received_from_is_address(doc, emit):
         if not hop.from_host or not ADDR_RE.fullmatch(hop.from_host):
             continue
         findings.append(emit(
-            f"Hop {hop.index} records 'from {hop.from_host}'. The from-clause "
-            f"of a Received header holds the HELO/EHLO hostname of the "
-            f"connecting server, never a mailbox address. A real MTA could "
-            f"not have written this line.",
+            f"Hop {hop.index} records 'from {hop.from_host}'. The "
+            f"from-clause of a Received header is meant to hold the "
+            f"HELO/EHLO name of the connecting server, not a mailbox "
+            f"address. Some legacy MTAs did write the sender here -- AOL's "
+            f"mail_out is the common example -- so this is not proof of "
+            f"anything on its own, but modern software does not, and a "
+            f"hand-written chain often does.",
             [Evidence(f"Received (hop {hop.index})", hop.raw)],
         ))
     return findings
@@ -88,14 +96,34 @@ def received_timestamps_non_monotonic(doc, emit):
         # too large for clock skew is evidence of anything.
         if delta <= SKEW_TOLERANCE_SECONDS:
             continue
+        if delta > IMPLAUSIBLE_SKEW_SECONDS:
+            detail = (
+                f"Hop {later.index} is timestamped "
+                f"{later.timestamp.isoformat()}, which is "
+                f"{_describe(delta)} *before* hop {earlier.index} at "
+                f"{earlier.timestamp.isoformat()}. Mail cannot arrive at a "
+                f"later relay before it left an earlier one. Clock skew "
+                f"and timezone misconfiguration explain gaps of a few "
+                f"hours and are extremely common, but nothing legitimate "
+                f"produces a gap this size -- at least one of these "
+                f"headers was written by hand."
+            )
+            severity = Severity.MEDIUM
+        else:
+            detail = (
+                f"Hop {later.index} is timestamped "
+                f"{later.timestamp.isoformat()}, which is "
+                f"{_describe(delta)} *before* hop {earlier.index} at "
+                f"{earlier.timestamp.isoformat()}. The usual cause is a "
+                f"relay with the wrong clock or timezone, which is common "
+                f"enough in real infrastructure to be unremarkable -- "
+                f"roughly one legitimate message in twenty has a backwards "
+                f"step of this scale. Recorded for the timeline, not as "
+                f"evidence of forgery."
+            )
+            severity = Severity.INFO
         findings.append(emit(
-            f"Hop {later.index} is timestamped "
-            f"{later.timestamp.isoformat()}, which is {_describe(delta)} "
-            f"*before* hop {earlier.index} at "
-            f"{earlier.timestamp.isoformat()}. Mail cannot arrive at a "
-            f"later relay before it left an earlier one, and the gap is "
-            f"too large to be clock drift, so at least one of these "
-            f"headers was fabricated.",
+            detail,
             [
                 Evidence(f"Hop {earlier.index} (UTC)",
                          earlier.timestamp.astimezone(timezone.utc).isoformat()),
@@ -105,6 +133,7 @@ def received_timestamps_non_monotonic(doc, emit):
                 Evidence(f"Hop {earlier.index} raw", earlier.raw),
                 Evidence(f"Hop {later.index} raw", later.raw),
             ],
+            severity_override=severity,
         ))
     return findings
 
