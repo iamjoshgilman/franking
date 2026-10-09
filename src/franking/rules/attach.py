@@ -12,11 +12,28 @@ import re
 from franking.model import Evidence, Severity
 from franking.parse import DOCUMENT_EXTS, EXECUTABLE_EXTS
 from franking.rules import rule
+from franking.rules._context import (
+    ARCHIVE_EXTS,
+    HIGH_RISK_EXTS,
+    ZIP_BASED_EXTS,
+)
 
 # "the password is hunter2", "pw: hunter2", "passcode hunter2"
+# Requires an actual assignment -- "password: hunter2", "pw is hunter2" --
+# not the bare word. Without a mandatory separator this matched any
+# sentence merely mentioning passwords, including "we never send the
+# password by email", which promoted a legitimate partner's encrypted
+# archive to CRITICAL and printed "password by" as the evidence.
 PASSWORD_RE = re.compile(
-    r"(?:pass\s?(?:word|code)|pwd|pw)\s*(?:is|=|:)?\s*[\"'‘“]?"
-    r"([^\s\"'’”<>]{2,40})",
+    r"(?:pass\s?(?:word|code)|passphrase|pwd|\bpw)\s*(?:is|=|:)\s*"
+    r"[\"'‘“]?(?P<secret>[^\s\"'’”<>,.;]{3,40})",
+    re.I,
+)
+# Phrases meaning the password is deliberately *not* in this message.
+PASSWORD_ABSENT_RE = re.compile(
+    r"(?:never|not|won't|will not|do not|don't)\s+(?:\w+\s+){0,3}"
+    r"(?:send|share|include|provide|email|disclose)\b[^.]{0,80}"
+    r"(?:pass\s?(?:word|code)|passphrase)",
     re.I,
 )
 
@@ -80,17 +97,37 @@ def archive_contains_executable(doc, emit):
         if not risky:
             continue
         names = ", ".join(e.name for e in risky)
+        # Severity by what is actually inside. A zip of a web build
+        # contains .js by definition; a zip containing .exe does not have
+        # an innocent reading.
+        direct = [e for e in risky if e.final_ext in HIGH_RISK_EXTS]
+        disguised = [e for e in risky if len(e.extensions) > 1]
+        severity = (Severity.CRITICAL if (direct or disguised)
+                    else Severity.MEDIUM)
+        if severity is Severity.CRITICAL:
+            detail = (
+                f"'{att.filename}' contains {names}. Archiving an executable "
+                f"is the standard way past a mail gateway, which often scans "
+                f"attachments by type without opening the container. The "
+                f"recipient extracting the file is what delivers the payload."
+            )
+        else:
+            detail = (
+                f"'{att.filename}' contains {names}. Script files inside an "
+                f"archive are routine in software distribution -- a web "
+                f"build or a Java artifact looks exactly like this -- so "
+                f"this is only notable alongside other findings. None of "
+                f"them runs on a double-click."
+            )
         findings.append(emit(
-            f"'{att.filename}' contains {names}. Archiving an executable is "
-            f"the standard way to get it past a mail gateway, which will "
-            f"often scan attachments by type but not open the container. The "
-            f"recipient extracting the file is what delivers the payload.",
+            detail,
             [
                 Evidence("Archive", att.filename),
                 Evidence("Archive SHA-256", att.sha256),
                 Evidence("Executable content", names),
             ],
             title_override=f"Executable inside {att.filename}",
+            severity_override=severity,
         ))
     return findings
 
@@ -108,7 +145,7 @@ def magic_mismatch(doc, emit):
             continue
         ext = att.final_ext
         consistent = (
-            (ext in {"zip", "jar", "docx", "xlsx", "pptx"} and actual.startswith("ZIP"))
+            (ext in ZIP_BASED_EXTS and actual.startswith("ZIP"))
             or (ext == "pdf" and actual.startswith("PDF"))
             or (ext in {"doc", "xls", "ppt", "msg"} and actual.startswith("OLE2"))
             or (ext in {"exe", "dll", "scr"} and actual.startswith("Windows PE"))
@@ -138,12 +175,21 @@ def bare_executable(doc, emit):
     findings = []
     for att in doc.attachments:
         ext = att.final_ext
-        if ext not in EXECUTABLE_EXTS or len(att.extensions) > 1:
-            continue  # the double-extension rule covers the disguised case
+        if ext not in EXECUTABLE_EXTS:
+            continue
+        # Defer to ATT001 only when ATT001 will actually fire -- that is,
+        # when the preceding extension is a known document type. Skipping
+        # every multi-extension name left a seam: Invoice.v2.exe matched
+        # neither rule, so a bare mailed executable went unreported.
+        exts = att.extensions
+        if len(exts) > 1 and exts[-2] in DOCUMENT_EXTS:
+            continue
+        disguise = (f" The '.{exts[-2]}' before it adds nothing but "
+                    f"confusion to the name." if len(exts) > 1 else "")
         findings.append(emit(
-            f"'{att.filename}' is a .{ext} file sent directly. Running it "
-            f"hands the sender code execution on the host. No routine "
-            f"business process requires mailing a file of this type.",
+            f"'{att.filename}' is a .{ext} file sent directly.{disguise} "
+            f"Running it hands the sender code execution on the host. No "
+            f"routine business process requires mailing a file of this type.",
             [
                 Evidence("Filename", att.filename),
                 Evidence("SHA-256", att.sha256),
@@ -165,6 +211,9 @@ def encrypted_archive_with_password(doc, emit):
     """
     findings = []
     match = PASSWORD_RE.search(doc.body_text)
+    if match and PASSWORD_ABSENT_RE.search(doc.body_text):
+        # The body is saying where the password is *not*.
+        match = None
 
     for att in doc.attachments:
         if not att.is_encrypted:
@@ -183,7 +232,7 @@ def encrypted_archive_with_password(doc, emit):
             evidence = [
                 Evidence("Archive", att.filename),
                 Evidence("Encrypted entries", locked),
-                Evidence("Password hint in body", match.group(0).strip()),
+                Evidence("Password in body", match.group("secret")),
                 Evidence("SHA-256", att.sha256),
             ]
         else:
@@ -207,6 +256,74 @@ def encrypted_archive_with_password(doc, emit):
                 f"Encrypted archive {att.filename}"
                 + (" with password in body" if match else "")
             ),
+        ))
+    return findings
+
+
+@rule("ATT007", "Archive contains another archive", Severity.HIGH,
+      mitre=["T1027.002", "T1566.001"])
+def nested_archive(doc, emit):
+    """Double-zipping, the oldest gateway evasion there is.
+
+    Every attachment rule reads one level of archive contents, so a
+    payload one level deeper is invisible to all of them: the same
+    .pdf.exe that fires two CRITICALs at depth one produces nothing at
+    depth two. Until the parser recurses, the nesting itself is the
+    finding -- and it is a strong one, because there is almost no honest
+    reason to put a zip inside a zip in email.
+    """
+    findings = []
+    for att in doc.attachments:
+        inner = [e for e in att.archive_entries
+                 if e.final_ext in ARCHIVE_EXTS]
+        if not inner:
+            continue
+        names = ", ".join(e.name for e in inner)
+        findings.append(emit(
+            f"'{att.filename}' contains {names} -- an archive inside an "
+            f"archive. Scanners that look one level deep see only another "
+            f"container, and so does this tool: nothing can be said about "
+            f"what is in the innermost layer. Legitimate mail essentially "
+            f"never nests archives, while gateway evasion relies on it. "
+            f"Extract the inner archive and analyse it separately.",
+            [
+                Evidence("Outer archive", att.filename),
+                Evidence("Nested archive(s)", names),
+                Evidence("Outer SHA-256", att.sha256),
+            ],
+            title_override=f"Nested archive inside {att.filename}",
+        ))
+    return findings
+
+
+@rule("ATT008", "Archive format could not be inspected", Severity.INFO)
+def uninspected_archive(doc, emit):
+    """Say so rather than implying an empty archive is a safe one.
+
+    is_archive accepts .rar and .7z, then the ZIP scanner finds nothing
+    in them -- so archive_entries is empty, is_encrypted is False, and
+    every content rule silently passes. An encrypted RAR could not be
+    reported at all.
+    """
+    findings = []
+    for att in doc.attachments:
+        if not att.is_archive or att.archive_entries:
+            continue
+        fmt = att.final_ext.upper() or "unknown"
+        if fmt.lower() in ("zip",):
+            continue
+        findings.append(emit(
+            f"'{att.filename}' is a {fmt} archive. Only ZIP containers can "
+            f"be listed here, so its contents are unknown -- not empty, and "
+            f"not safe. Any finding about what this attachment holds is "
+            f"absent because it could not be read, which is worth knowing "
+            f"before concluding the message is clean.",
+            [
+                Evidence("Attachment", att.filename),
+                Evidence("Format", fmt),
+                Evidence("SHA-256", att.sha256),
+            ],
+            title_override=f"{att.filename} ({fmt}) was not inspected",
         ))
     return findings
 

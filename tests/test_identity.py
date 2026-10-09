@@ -180,12 +180,43 @@ class TestInvisibleCharacterRule:
 
 
 class TestThreadHijackRule:
-    def test_fires_when_the_sender_is_not_from_the_thread(self,
-                                                          evasive_findings):
-        finding = next(f for f in evasive_findings if f.id == "IDN004")
+    """The rule only reports what it can actually distinguish.
+
+    "Sender's domain is not in the thread" is the shape of every genuine
+    reply -- Message-IDs are minted by the sender's MTA -- so it cannot
+    separate a hijack from a conversation. A sender whose domain
+    *resembles* one already in the thread can.
+    """
+
+    def test_a_lookalike_reply_fires(self):
+        doc = EmailDoc(
+            b"From: Billing <billing@supp1ier.example>\r\n"
+            b"To: ap@company.example\r\nSubject: RE: March invoice\r\n"
+            b"References: <a1@supplier.example> <b2@supplier.example>\r\n"
+            b"\r\nupdated bank details attached\r\n"
+        )
+        finding = next(f for f in run_all(doc) if f.id == "IDN004")
         assert finding.severity is Severity.HIGH
         assert "supplier.example" in " ".join(
             e.value for e in finding.evidence)
+
+    def test_an_ordinary_cross_organisation_reply_is_quiet(self):
+        """The regression that matters: this is normal business mail."""
+        doc = EmailDoc(
+            b"From: Pat <pat@supplier.example>\r\n"
+            b"To: ops@company.example\r\nSubject: RE: March schedule\r\n"
+            b"References: <a1@company.example>\r\n"
+            b"\r\nlooks good, thanks\r\n"
+        )
+        assert "IDN004" not in fired(run_all(doc))
+
+    def test_a_reply_within_one_organisation_is_quiet(self):
+        doc = EmailDoc(
+            b"From: a@supplier.example\r\nTo: c@d.example\r\n"
+            b"Subject: RE: schedule\r\n"
+            b"References: <1@supplier.example>\r\n\r\nbody\r\n"
+        )
+        assert "IDN004" not in fired(run_all(doc))
 
     def test_reply_subject_with_no_thread_is_medium(self):
         doc = EmailDoc(
@@ -195,11 +226,19 @@ class TestThreadHijackRule:
         finding = next(f for f in run_all(doc) if f.id == "IDN004")
         assert finding.severity is Severity.MEDIUM
 
-    def test_genuine_reply_within_one_domain_is_quiet(self):
+    def test_a_forward_with_no_thread_is_quiet(self):
+        """FW: legitimately starts a new thread; RE: does not."""
         doc = EmailDoc(
-            b"From: a@supplier.example\r\nTo: c@d.example\r\n"
-            b"Subject: RE: schedule\r\n"
-            b"References: <1@supplier.example>\r\n\r\nbody\r\n"
+            b"From: a@b.example\r\nTo: c@d.example\r\n"
+            b"Subject: FW: is this legit?\r\n\r\nbody\r\n"
+        )
+        assert "IDN004" not in fired(run_all(doc))
+
+    def test_a_list_digest_reply_is_quiet(self):
+        doc = EmailDoc(
+            b"From: a@b.example\r\nTo: list@c.example\r\n"
+            b"Subject: Re: [dev] build failure\r\n"
+            b"List-Id: <dev.c.example>\r\n\r\nbody\r\n"
         )
         assert "IDN004" not in fired(run_all(doc))
 

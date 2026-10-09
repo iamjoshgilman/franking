@@ -100,7 +100,33 @@ def is_bulk(doc) -> bool:
 
 def is_autoreply(doc) -> bool:
     auto = (doc.get("Auto-Submitted") or "").strip().lower()
-    return bool(auto) and auto != "no"
+    if auto and auto != "no":
+        return True
+    return bool(doc.get("X-Auto-Response-Suppress"))
+
+
+# The fixed GUID mailbox Exchange sends every non-delivery report from.
+EXCHANGE_NDR_LOCALPART = "microsoftexchange329e71ec88ae4615bbc36ab6ce41109e"
+BOUNCE_LOCALPARTS = {
+    "postmaster", "mailer-daemon", "mailerdaemon", "mail-daemon",
+    EXCHANGE_NDR_LOCALPART,
+}
+
+
+def is_bounce(doc) -> bool:
+    """A delivery status notification rather than a message from a person.
+
+    These have odd senders by design -- Exchange sends every NDR as
+    "Microsoft Outlook" from a fixed GUID mailbox on the recipient's own
+    domain -- so impersonation rules have to stand down.
+    """
+    ctype = (doc.get("Content-Type") or "").lower()
+    if "report-type=delivery-status" in ctype or "delivery-status" in ctype:
+        return True
+    localpart = doc.from_addr.split("@")[0].lower()
+    if localpart in BOUNCE_LOCALPARTS:
+        return True
+    return bool(doc.get("X-Failed-Recipients"))
 
 
 def same_org(a: str, b: str) -> bool:

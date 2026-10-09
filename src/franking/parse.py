@@ -899,6 +899,11 @@ class EmailDoc:
                 entry = auth.arc_sets.setdefault(instance, {})
                 for key, val in tags.items():
                     entry[f"{header.lower()}.{key}"] = val
+                # Keep this instance's own text. doc.get() returns the
+                # first header of that name regardless of instance, so a
+                # finding about i=1 would print the i=2 header as its
+                # evidence and look simply wrong to anyone checking.
+                entry[f"{header.lower()}.raw"] = " ".join(value.split())
                 entry.setdefault("_headers", "")
                 entry["_headers"] += f"{header} "
 

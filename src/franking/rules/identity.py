@@ -5,6 +5,11 @@ a domain that renders as another one, characters that hide a file's real
 extension, a reply grafted onto a conversation that was already trusted.
 The common thread is that the evidence is visible in the raw bytes but
 invisible on screen.
+
+The hard part is not detection, it is precision. An internationalised
+domain is not an attack, a reply from another company is not a hijack,
+and a zero-width joiner in an emoji is not evasion. Each rule here has to
+separate the deception from the ordinary thing that resembles it.
 """
 
 from __future__ import annotations
@@ -14,21 +19,31 @@ import re
 from franking.model import Evidence, Severity
 from franking.parse import (
     BIDI_OVERRIDES,
-    CONFUSABLE_SCRIPTS,
-    IMPERSONATION_TARGETS,
+    ZERO_WIDTH,
     decode_punycode,
-    edit_distance,
     invisible_chars,
     mixed_scripts,
     org_domain,
 )
 from franking.rules import rule
+from franking.rules._context import (
+    brand_family,
+    is_bulk,
+    resembles_brand,
+    significant_labels,
+    skeleton,
+)
 
 # Reply prefixes only. A forward legitimately starts a new thread with no
 # References header, so fw/fwd/tr must not be treated as a missing
 # conversation -- that fires on every honest user report.
-REPLY_PREFIX_RE = re.compile(r"^\s*(re|aw|sv|antw)\s*[:\]]", re.I)
+REPLY_PREFIX_RE = re.compile(r"^\s*(re|aw|sv|antw|rif|r)\s*(\[\d+\])?\s*[:\]]",
+                             re.I)
 MSGID_DOMAIN_RE = re.compile(r"<[^@>]+@([^>]+)>")
+
+# Scripts whose letters have Latin twins. Mixing one of these with Latin
+# inside a single label has no legitimate use.
+CONFUSABLE_SCRIPTS = frozenset({"CYRILLIC", "GREEK", "ARMENIAN"})
 
 
 def _candidate_domains(doc) -> list[tuple[str, str]]:
@@ -50,36 +65,109 @@ def _candidate_domains(doc) -> list[tuple[str, str]]:
     return unique
 
 
-@rule("IDN001", "Punycode domain", Severity.HIGH,
-      mitre=["T1583.001", "T1656"])
-def punycode_domain(doc, emit):
+def _display_form(host: str) -> str:
+    """What the reader sees: punycode decoded, everything else as-is."""
+    return decode_punycode(host) or host
+
+
+@rule("IDN001", "Domain renders as different text than it resolves to",
+      Severity.HIGH, mitre=["T1583.001", "T1656"])
+def deceptive_domain_rendering(doc, emit):
+    """Homoglyphs, separated from ordinary internationalisation.
+
+    Three different things look alike here and only one is an attack:
+
+    - Two scripts inside a *single label* (``pаypal``). No language
+      does this; it exists to render as something else. CRITICAL.
+    - One non-Latin label that reduces to a known brand once confusable
+      characters are mapped to their Latin twins (``аррӏе`` -> apple).
+      CRITICAL.
+    - A non-Latin or accented domain that reduces to nothing in
+      particular (``кофейня.ru``, ``münchen-reisebüro.de``). That is a
+      Russian coffee shop and a German travel agent. INFO at most.
+
+    The earlier version ran the script check across the whole host
+    including the TLD, so every internationalised domain under a Latin
+    TLD contained "Latin" by construction and was reported CRITICAL.
+    """
     findings = []
-    for domain, source in _candidate_domains(doc):
-        decoded = decode_punycode(domain)
-        if decoded is None or decoded == domain:
+    seen = set()
+    for host, source in _candidate_domains(doc):
+        display = _display_form(host)
+        labels = significant_labels(display)
+        if not labels:
             continue
-        scripts = mixed_scripts(decoded)
-        confusable = [s for s in scripts if s in CONFUSABLE_SCRIPTS]
-        severity = (Severity.CRITICAL
-                    if confusable and "LATIN" in scripts else Severity.HIGH)
-        note = ""
-        if confusable and "LATIN" in scripts:
-            note = (f" It mixes Latin with {', '.join(sorted(confusable))} "
-                    f"characters in one name, which has no legitimate use "
-                    f"and exists only to render as a different domain.")
+        key = org_domain(display)
+        if key in seen:
+            continue
+
+        worst = None
+        for label in labels:
+            scripts = mixed_scripts(label)
+            confusable = scripts & CONFUSABLE_SCRIPTS
+            if confusable and "LATIN" in scripts:
+                worst = ("mixed", label, scripts, None)
+                break
+            if confusable:
+                match = resembles_brand(label)
+                if match:
+                    worst = ("brand", label, scripts, match)
+                    break
+                worst = worst or ("intl", label, scripts, None)
+            elif display != host:
+                worst = worst or ("intl", label, scripts, None)
+
+        if worst is None:
+            continue
+        seen.add(key)
+        kind, label, scripts, match = worst
+        script_list = ", ".join(sorted(scripts)) or "n/a"
+
+        if kind == "mixed":
+            detail = (
+                f"The {source} domain renders as '{display}'. The label "
+                f"'{label}' mixes {script_list} in a single name, which no "
+                f"writing system does. The only purpose of combining scripts "
+                f"inside one word is to make it look like a different word."
+            )
+            severity = Severity.CRITICAL
+        elif kind == "brand":
+            target, distance = match
+            detail = (
+                f"The {source} domain renders as '{display}'. Mapping its "
+                f"confusable characters to their Latin twins reduces "
+                f"'{label}' to '{skeleton(label)}', which is "
+                f"{'identical to' if distance == 0 else 'one edit from'} "
+                f"{target}. The name is written in {script_list} so that it "
+                f"resolves somewhere else entirely while reading as a brand "
+                f"the recipient trusts."
+            )
+            severity = Severity.CRITICAL
+        else:
+            detail = (
+                f"The {source} uses the internationalised domain '{display}'"
+                + (f" (encoded as {host})" if display != host else "")
+                + f". Its characters are {script_list}. This is normal for "
+                f"an organisation that does not write its name in ASCII, and "
+                f"is only worth noting because the encoded and displayed "
+                f"forms differ. It does not resemble a known brand."
+            )
+            severity = Severity.INFO
+
         findings.append(emit(
-            f"The {source} uses the punycode domain {domain}, which a "
-            f"browser and most mail clients display as '{decoded}'.{note} "
-            f"What the reader sees and what the resolver resolves are "
-            f"different strings.",
+            detail,
             [
-                Evidence("Encoded", domain),
-                Evidence("Displayed as", decoded),
-                Evidence("Scripts present", ", ".join(sorted(scripts)) or "n/a"),
+                Evidence("As written", host),
+                Evidence("As displayed", display),
+                Evidence("Label examined", label),
+                Evidence("Scripts in that label", script_list),
                 Evidence("Source", source),
             ],
             severity_override=severity,
-            title_override=f"Punycode domain: {domain}",
+            title_override=(
+                f"Internationalised domain: {display}" if kind == "intl"
+                else f"Homoglyph domain: {display}"
+            ),
         ))
     return findings
 
@@ -87,62 +175,77 @@ def punycode_domain(doc, emit):
 @rule("IDN002", "Domain closely resembles a well-known one", Severity.HIGH,
       mitre=["T1583.001", "T1656"])
 def lookalike_domain(doc, emit):
+    """ASCII near-misses of a trusted name.
+
+    Deliberately narrow. Reporting every domain that shares a stem with a
+    brand flags that brand's own second domains -- atlassian.net,
+    github.io, docusign.net are all real -- and a HIGH finding on genuine
+    Jira mail teaches an analyst to ignore the rule entirely.
+    """
     findings = []
-    for domain, source in _candidate_domains(doc):
-        org = org_domain(domain)
-        if org in IMPERSONATION_TARGETS:
+    reported = set()
+    for host, source in _candidate_domains(doc):
+        # Non-ASCII and punycode hosts are IDN001's job, and it reports
+        # them with the rendering explained. Edit-distancing an A-label's
+        # checksum suffix against brand names also produces nonsense like
+        # "xn--mnchen-reisebro-zvbm resembles zoom".
+        if "xn--" in host.lower() or not host.isascii():
+            continue
+        org = org_domain(host)
+        if org in reported:
             continue
         stem = org.split(".")[0]
         if len(stem) < 4:
             continue
 
-        # Compare the whole name and each hyphen-separated token. Real
-        # lookalikes are as often "paypal-security" as "paypa1" -- the
-        # brand is embedded beside a reassuring word rather than misspelt
-        # on its own.
-        candidates = {stem, *(t for t in stem.split("-") if len(t) >= 4)}
+        tokens = {stem, *(t for t in stem.split("-") if len(t) >= 4)}
         best = None
-        for target in IMPERSONATION_TARGETS:
-            target_stem = target.split(".")[0]
-            for candidate in candidates:
-                if abs(len(candidate) - len(target_stem)) > 2:
-                    continue
-                distance = edit_distance(candidate, target_stem)
-                if distance > 2:
-                    continue
-                if best is None or distance < best[2]:
-                    best = (target, candidate, distance)
+        for token in tokens:
+            match = resembles_brand(token, max_distance=2)
+            if match is None:
+                continue
+            target, distance = match
+            if best is None or distance < best[2]:
+                best = (target, token, distance)
         if best is None:
             continue
+        target, token, distance = best
+        target_stem = target.split(".")[0]
 
-        target, candidate, distance = best
+        # The brand's own infrastructure: same name, different suffix, or
+        # a sibling brand. atlassian.net is Atlassian.
+        if distance == 0 and stem == target_stem:
+            continue
+        if brand_family(target_stem) & {stem, token}:
+            continue
+
+        reported.add(org)
         if distance == 0:
             detail = (
-                f"The {source} domain {domain} contains the brand name "
-                f"'{candidate}' but is not {target}. Appending a word like "
-                f"'security', 'login' or 'support' to a brand produces a "
-                f"domain that reads as official to anyone skimming, and "
-                f"it is registrable by anyone."
+                f"The {source} domain {host} contains the brand name "
+                f"'{token}' as part of a longer name, but its registrable "
+                f"domain is {org}, which is not {target}. Pairing a brand "
+                f"with a reassuring word reads as official to anyone "
+                f"skimming, and the result is registrable by anyone."
             )
         else:
             detail = (
-                f"The {source} domain {domain} is {distance} character"
+                f"The {source} domain {host} is {distance} character"
                 f"{'s' if distance > 1 else ''} away from {target} "
-                f"('{candidate}' vs '{target.split('.')[0]}'). At a glance, "
-                f"and especially on a phone, the two read the same. "
-                f"Registering a near-miss of a trusted brand is the cheapest "
-                f"way to borrow its credibility."
+                f"('{token}' against '{target_stem}'). At a glance, and "
+                f"especially on a phone, the two read the same."
             )
         findings.append(emit(
             detail,
             [
-                Evidence("Observed", domain),
+                Evidence("Observed", host),
+                Evidence("Registrable domain", org),
                 Evidence("Resembles", target),
-                Evidence("Matched on", candidate),
+                Evidence("Matched on", token),
                 Evidence("Edit distance", str(distance)),
                 Evidence("Source", source),
             ],
-            title_override=f"{domain} resembles {target}",
+            title_override=f"{org} resembles {target}",
         ))
     return findings
 
@@ -153,13 +256,17 @@ def invisible_characters(doc, emit):
     """Text that renders differently from how it parses.
 
     A right-to-left override inside a filename is the classic: the bytes
-    say ``.exe`` and the screen says ``.txt``.
+    say ``.exe`` and the screen says ``.txt``. Zero-width characters are
+    a much weaker signal -- a joiner is *required* to build an emoji and
+    to write Persian, Arabic and Devanagari correctly -- so those are
+    only reported where they cannot be doing legitimate work.
     """
     findings = []
     places = [
         ("Subject", doc.subject),
         ("From header", doc.get("From") or ""),
         ("Reply-To header", doc.get("Reply-To") or ""),
+        ("To header", doc.get("To") or ""),
     ]
     places += [(f"attachment name: {a.filename}", a.filename)
                for a in doc.attachments]
@@ -171,70 +278,122 @@ def invisible_characters(doc, emit):
         found = invisible_chars(text)
         if not found:
             continue
-        names = ", ".join(sorted({name for _, name in found}))
-        is_bidi = any(ch in BIDI_OVERRIDES for ch, _ in found)
-        visible = "".join(c for c in text if c not in dict(found))
-        if is_bidi:
-            detail = (
+        bidi = [(c, n) for c, n in found if c in BIDI_OVERRIDES]
+        zero = [(c, n) for c, n in found if c in ZERO_WIDTH]
+
+        if bidi:
+            names = ", ".join(sorted({n for _, n in bidi}))
+            findings.append(emit(
                 f"{where} contains a bidirectional override ({names}). These "
                 f"reverse how the text after them is drawn, so a file named "
-                f"'…gnp.exe' can appear as '…exe.png'. The name on screen is "
-                f"not the name on disk."
-            )
-            severity = Severity.CRITICAL
-        else:
-            detail = (
-                f"{where} contains zero-width characters ({names}). They "
-                f"occupy no space on screen but break the string for any "
-                f"filter matching on exact text, which is usually why they "
-                f"are there."
-            )
-            severity = Severity.MEDIUM
-        findings.append(emit(
-            detail,
-            [
-                Evidence("Location", where),
-                Evidence("Characters", names),
-                Evidence("Codepoints",
-                         " ".join(f"U+{ord(c):04X}" for c, _ in found)),
-                Evidence("With them removed", visible),
-            ],
-            severity_override=severity,
-            title_override=f"Invisible characters in {where.split(':')[0]}",
-        ))
+                f"'...gnp.exe' appears as '...exe.png'. The name on screen "
+                f"is not the name on disk.",
+                [
+                    Evidence("Location", where),
+                    Evidence("Characters", names),
+                    Evidence("Codepoints",
+                             " ".join(f"U+{ord(c):04X}" for c, _ in bidi)),
+                    Evidence("With them removed",
+                             "".join(c for c in text
+                                     if c not in dict(found))),
+                ],
+                severity_override=Severity.CRITICAL,
+                title_override=f"Bidirectional override in {where.split(':')[0]}",
+            ))
+            continue
+
+        if zero and _zero_width_is_suspicious(text, zero):
+            names = ", ".join(sorted({n for _, n in zero}))
+            findings.append(emit(
+                f"{where} contains zero-width characters ({names}) among "
+                f"ASCII text, where they can serve no typographic purpose. "
+                f"They occupy no space on screen but break the string for "
+                f"any filter matching on exact text, which is usually why "
+                f"they are there.",
+                [
+                    Evidence("Location", where),
+                    Evidence("Characters", names),
+                    Evidence("Codepoints",
+                             " ".join(f"U+{ord(c):04X}" for c, _ in zero)),
+                    Evidence("With them removed",
+                             "".join(c for c in text
+                                     if c not in dict(found))),
+                ],
+                severity_override=Severity.MEDIUM,
+                title_override=f"Zero-width characters in {where.split(':')[0]}",
+            ))
     return findings
 
 
-@rule("IDN004", "Reply injected into an existing conversation",
+def _zero_width_is_suspicious(text: str, found: list[tuple[str, str]]) -> bool:
+    """Is a zero-width character doing legitimate typographic work?
+
+    A joiner between two non-ASCII characters is building an emoji or
+    writing a script that needs it. A BOM at the start is Windows
+    tooling. A joiner sitting between two ASCII letters is hiding
+    something.
+    """
+    for char, _ in found:
+        if char == "﻿" and text.startswith(char):
+            continue
+        index = text.find(char)
+        before = text[index - 1] if index > 0 else ""
+        after = text[index + 1] if index + 1 < len(text) else ""
+        neighbours = before + after
+        if neighbours and any(ord(c) > 0x2100 for c in neighbours):
+            continue  # emoji or non-Latin script
+        return True
+    return False
+
+
+@rule("IDN004", "Reply from a domain impersonating the conversation",
       Severity.HIGH, mitre=["T1566.001", "T1534"])
 def thread_hijack(doc, emit):
-    """Replies arrive pre-trusted, which is the point of stealing one."""
-    references = (doc.get("References") or "") + " " + (doc.get("In-Reply-To") or "")
+    """A reply arrives pre-trusted, which is the point of forging one.
+
+    The naive test -- the sender's domain is not one of the thread's --
+    is useless: Message-IDs are minted by the *sender's* MTA, so every
+    genuine reply from a customer, supplier or Gmail user trips it. It
+    is quiet only when you reply to yourself.
+
+    What is actually diagnostic is a reply from a domain that *resembles*
+    one already in the thread. That is an attacker who registered a
+    near-miss and injected themselves into a conversation the recipient
+    was already having, and it has no innocent explanation.
+    """
+    references = f"{doc.get('References') or ''} {doc.get('In-Reply-To') or ''}"
     thread_domains = {
         org_domain(d) for d in MSGID_DOMAIN_RE.findall(references)
     }
+    thread_domains.discard("")
     from_org = org_domain(doc.domain_of(doc.from_addr))
 
     if thread_domains and from_org and from_org not in thread_domains:
-        return emit(
-            f"This is a reply in a conversation whose earlier messages came "
-            f"from {', '.join(sorted(thread_domains))}, but it was sent from "
-            f"{from_org}. A stolen mailbox lets an attacker answer a thread "
-            f"the recipient already trusts, which removes the usual "
-            f"unexpected-message cue entirely.",
-            [
-                Evidence("From", doc.from_addr),
-                Evidence("Thread originated at", ", ".join(sorted(thread_domains))),
-                Evidence("References", (doc.get("References") or "")[:200]),
-            ],
-        )
+        for thread_org in sorted(thread_domains):
+            if _is_near_miss(from_org, thread_org):
+                return emit(
+                    f"This is a reply in a conversation whose earlier "
+                    f"messages came from {thread_org}, but it was sent from "
+                    f"{from_org} -- a near-identical domain, not the same "
+                    f"one. Someone registered a lookalike and answered into "
+                    f"a thread the recipient was already having, which "
+                    f"removes the unexpected-message cue entirely.",
+                    [
+                        Evidence("From", doc.from_addr),
+                        Evidence("Thread domain", thread_org),
+                        Evidence("Sender domain", from_org),
+                        Evidence("References",
+                                 (doc.get("References") or "")[:200]),
+                    ],
+                )
 
-    if REPLY_PREFIX_RE.match(doc.subject) and not references.strip():
+    if (REPLY_PREFIX_RE.match(doc.subject) and not references.strip()
+            and not is_bulk(doc)):
         return emit(
             f"The subject is formatted as a reply ({doc.subject!r}) but the "
             f"message carries no In-Reply-To or References header, so there "
             f"is no conversation it belongs to. The prefix was typed to "
-            f"borrow the familiarity of an ongoing exchange.",
+            f"borrow the familiarity of an exchange that never happened.",
             [
                 Evidence("Subject", doc.subject),
                 Evidence("In-Reply-To", doc.get("In-Reply-To") or "absent"),
@@ -244,3 +403,18 @@ def thread_hijack(doc, emit):
             title_override="Reply subject with no conversation behind it",
         )
     return None
+
+
+def _is_near_miss(candidate: str, target: str) -> bool:
+    """Same organisation name to the eye, different domain in fact."""
+    if candidate == target:
+        return False
+    from franking.parse import edit_distance
+
+    c_stem, t_stem = candidate.split(".")[0], target.split(".")[0]
+    if len(t_stem) < 4:
+        return False
+    if skeleton(c_stem) == skeleton(t_stem):
+        return True
+    distance = edit_distance(c_stem, t_stem)
+    return distance <= 2 and abs(len(c_stem) - len(t_stem)) <= 2
