@@ -80,10 +80,6 @@ ZERO_WIDTH = {
 }
 INVISIBLE = {**BIDI_OVERRIDES, **ZERO_WIDTH}
 
-# Scripts that, mixed with Latin inside one domain label, mean a homoglyph
-# attack rather than genuine internationalisation.
-CONFUSABLE_SCRIPTS = ("CYRILLIC", "GREEK", "ARMENIAN")
-
 # A nested message can nest again; cap it so a malformed sample cannot
 # recurse without bound.
 MAX_NESTING = 5

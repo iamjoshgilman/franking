@@ -85,7 +85,6 @@ HIGH_RISK_EXTS = {
     "bat", "cmd", "vbs", "vbe", "wsf", "wsh", "ps1", "jse", "reg",
     "chm", "scf", "inf", "application",
 }
-CONTEXT_RISK_EXTS = {"js", "jar", "vb", "iso", "img"}
 
 
 def is_bulk(doc) -> bool:
