@@ -124,6 +124,7 @@ franking message.eml --findings   # scrollback-friendly report
 franking message.eml --iocs       # indicators, one per line
 franking message.eml --json       # everything, machine-readable
 franking message.eml --tree       # section outline
+franking --rules                  # list every detection rule
 ```
 
 `--findings` exits non-zero when anything high or critical fired, so it drops
@@ -220,6 +221,15 @@ Addresses from RFC 5737 documentation ranges, RFC 1918 space and the
 reserved `555-01xx` phone block are flagged as synthetic, so sample material
 from training platforms does not quietly end up in a blocklist.
 
+## Documentation
+
+- **[docs/RULES.md](docs/RULES.md)** — all 41 rules with severity and
+  ATT&CK mapping. Generated from the registry; `franking --rules` prints
+  the same thing.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — architecture, how rules are
+  calibrated against real corpora, signals that were measured and
+  rejected, and the library gotchas that cost the most time.
+
 ## Writing a rule
 
 Rules live in `src/franking/rules/` and register themselves with a
@@ -243,14 +253,20 @@ Drop it in the right module and it appears everywhere — TUI, reports and
 JSON — with no further wiring. The parser never judges and the rules never
 parse, which keeps both testable.
 
-Every rule should have a test proving it fires on `tests/fixtures/phish.eml`
-**and** stays quiet on `tests/fixtures/clean.eml`. A rule that cannot stay
-quiet is noise.
+Every rule needs a test proving it fires on a phishing fixture **and**
+stays quiet on a legitimate one, then a run against the corpora before
+you believe either. A rule that cannot stay quiet is noise, and noise
+teaches whoever reads the output to stop reading it.
 
 ```bash
 pytest
 ruff check .
+python tools/gen_rules_doc.py          # after adding a rule
+python tools/corpus.py ham <dir>       # before believing it
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the corpora and the
+calibration facts.
 
 ## Scope
 

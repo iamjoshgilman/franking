@@ -16,6 +16,7 @@ only has to supply what varies.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from franking.model import Evidence, Finding, Severity
@@ -23,6 +24,21 @@ from franking.parse import EmailDoc
 
 RuleFn = Callable[[EmailDoc], list[Finding]]
 _REGISTRY: dict[str, RuleFn] = {}
+
+
+@dataclass(frozen=True)
+class RuleInfo:
+    """What a rule declares about itself, for the catalogue."""
+
+    id: str
+    title: str
+    severity: Severity
+    mitre: tuple[str, ...]
+    module: str
+    summary: str
+
+
+_CATALOGUE: dict[str, RuleInfo] = {}
 
 
 def rule(
@@ -65,6 +81,15 @@ def rule(
         if rule_id in _REGISTRY:
             raise ValueError(f"duplicate rule id: {rule_id}")
         _REGISTRY[rule_id] = runner
+        doc = (fn.__doc__ or "").strip().split("\n\n")[0]
+        _CATALOGUE[rule_id] = RuleInfo(
+            id=rule_id,
+            title=title,
+            severity=severity,
+            mitre=tuple(mitre_ids),
+            module=fn.__module__.rsplit(".", 1)[-1],
+            summary=" ".join(doc.split()),
+        )
         return fn
 
     return decorator
@@ -83,6 +108,11 @@ def registered_ids() -> list[str]:
     return sorted(_REGISTRY)
 
 
+def catalogue() -> list[RuleInfo]:
+    """Every registered rule, for documentation and --rules."""
+    return [_CATALOGUE[i] for i in sorted(_CATALOGUE)]
+
+
 # Importing the rule modules is what populates the registry.
 from franking.rules import (  # noqa: E402,F401
     attach,
@@ -93,4 +123,5 @@ from franking.rules import (  # noqa: E402,F401
     sender,
 )
 
-__all__ = ["rule", "run_all", "registered_ids", "Evidence", "Severity"]
+__all__ = ["rule", "run_all", "registered_ids", "catalogue", "RuleInfo",
+           "Evidence", "Severity"]

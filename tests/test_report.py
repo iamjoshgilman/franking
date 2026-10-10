@@ -95,3 +95,38 @@ class TestCli:
     def test_missing_file_is_reported(self, capsys):
         assert main(["/nonexistent/nope.eml", "--json"]) == 2
         assert "no such file" in capsys.readouterr().err
+
+
+class TestGeneratedDocs:
+    """The rule catalogue is generated, so it cannot silently drift."""
+
+    def test_rules_doc_is_current(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [sys.executable, str(root / "tools" / "gen_rules_doc.py"),
+             "--check"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            "docs/RULES.md is out of date -- run tools/gen_rules_doc.py\n"
+            + result.stderr
+        )
+
+    def test_every_rule_has_a_title_and_severity(self):
+        from franking.rules import catalogue
+        for info in catalogue():
+            assert info.title.strip(), info.id
+            assert info.severity is not None, info.id
+
+    def test_rule_ids_follow_the_module_prefix(self):
+        from franking.rules import catalogue
+        prefixes = {"attach": "ATT", "auth": "AUTH", "content": "CONT",
+                    "identity": "IDN", "routing": "ROUTE", "sender": "SEND"}
+        for info in catalogue():
+            expected = prefixes.get(info.module)
+            if expected:
+                assert info.id.startswith(expected), (
+                    f"{info.id} lives in {info.module}.py")

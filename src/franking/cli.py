@@ -14,7 +14,7 @@ from franking.report import (
     json_report,
     tree_report,
 )
-from franking.rules import run_all
+from franking.rules import catalogue, run_all
 from franking.view import build_tree
 
 
@@ -24,7 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Interactive analysis lens for .eml files.",
         epilog="With no output flag, franking opens the interactive browser.",
     )
-    parser.add_argument("file", type=Path, help="path to a .eml message")
+    parser.add_argument("file", type=Path, nargs="?",
+                        help="path to a .eml message")
+    parser.add_argument("--rules", action="store_true",
+                        help="list every detection rule and exit")
     parser.add_argument("--version", action="version",
                         version=f"franking {__version__}")
 
@@ -60,8 +63,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def rules_catalogue() -> str:
+    """The rule set as a table, generated from the registry itself.
+
+    Documentation written by hand drifts from the code; this cannot.
+    """
+    rules = catalogue()
+    width = max(len(r.title) for r in rules)
+    lines = [f"{len(rules)} rules", ""]
+    current = None
+    for info in rules:
+        if info.module != current:
+            current = info.module
+            lines.append(f"-- {current} " + "-" * (width - len(current) + 4))
+        mitre = ", ".join(info.mitre) or "--"
+        lines.append(f"{info.id:<9} {info.severity.value:<8} "
+                     f"{info.title:<{width}}  {mitre}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.rules:
+        print(rules_catalogue())
+        return 0
+    if args.file is None:
+        build_parser().print_usage(sys.stderr)
+        print("franking: a file is required unless --rules is given",
+              file=sys.stderr)
+        return 2
 
     if not args.file.is_file():
         print(f"franking: {args.file}: no such file", file=sys.stderr)
