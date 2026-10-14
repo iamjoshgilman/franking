@@ -57,8 +57,9 @@ jobs:
         # fixture; only 2+ is a real failure.
         run: |
           for flag in --json --findings --iocs --tree; do
-            python -m franking "$flag" tests/fixtures/evasive.eml > /dev/null
-            rc=$?
+            rc=0
+            # The runner's bash uses set -e, so capture rather than let it abort.
+            python -m franking "$flag" tests/fixtures/evasive.eml > /dev/null || rc=$?
             if [ "$rc" -ge 2 ]; then echo "$flag exited $rc"; exit 1; fi
           done
           python -m franking --rules > /dev/null

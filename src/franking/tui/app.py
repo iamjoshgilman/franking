@@ -141,13 +141,25 @@ class FrankingApp(App):
         first compose has mounted them. A deferred re-render must not take the
         app down with it, so missing widgets mean there is nothing to redraw.
         """
-        try:
-            items = self.query_one("#items", OptionList)
-        except (NoMatches, ScreenStackError):
+        items = self._widget("#items", OptionList)
+        if items is None:
             return
         keep = items.highlighted or 0
         self._refresh_spine()
         self._refresh_items(keep=keep)
+
+    def _widget(self, selector: str, kind):
+        """The widget, or None once the screen is no longer there.
+
+        Re-renders reach here from call_after_refresh, from on_resize and from
+        option-list messages, all of which can be delivered while the app is
+        shutting down or before the first compose has mounted anything. None
+        means there is nothing on screen to redraw, which is not an error.
+        """
+        try:
+            return self.query_one(selector, kind)
+        except (NoMatches, ScreenStackError):
+            return None
 
     @staticmethod
     def _usable_width(widget: OptionList, fallback: int) -> int:
@@ -157,7 +169,9 @@ class FrankingApp(App):
         return width - 2 if width > 10 else fallback - 2
 
     def _refresh_spine(self) -> None:
-        spine = self.query_one("#spine", OptionList)
+        spine = self._widget("#spine", OptionList)
+        if spine is None:
+            return
         keep = spine.highlighted or 0
         width = self._usable_width(spine, 20)
         spine.clear_options()
@@ -225,7 +239,9 @@ class FrankingApp(App):
         return children[index]
 
     def _refresh_items(self, keep: int = 0) -> None:
-        items = self.query_one("#items", OptionList)
+        items = self._widget("#items", OptionList)
+        if items is None:
+            return
         width = self._usable_width(items, 44)
         items.clear_options()
         children = self.current_container.children
