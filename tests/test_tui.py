@@ -6,19 +6,46 @@ when the styling changes.
 """
 
 import asyncio
+import time
 
 import pytest
 
 textual = pytest.importorskip("textual")
 
+from textual.css.query import NoMatches  # noqa: E402
+
 from franking.model import Node, Severity  # noqa: E402
 from franking.tui.app import FrankingApp, _row  # noqa: E402
+
+MOUNT_TIMEOUT = 10.0
+
+
+async def _await_mount(app, pilot, timeout: float = MOUNT_TIMEOUT) -> None:
+    """Wait until the widgets the tests query actually exist.
+
+    A single pilot.pause() is enough on a quiet machine but not on a loaded CI
+    runner, where the app has not finished composing yet and the tests fail
+    with a confusing NoMatches instead of a timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            app.query_one("#spine")
+            app.query_one("#items")
+            return
+        except NoMatches:
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"app did not finish mounting within {timeout:g}s"
+                ) from None
+            await pilot.pause()
 
 
 def drive(app, coro):
     async def runner():
         async with app.run_test(size=(120, 32)) as pilot:
             await pilot.pause()
+            await _await_mount(app, pilot)
             return await coro(app, pilot)
     return asyncio.run(runner())
 
