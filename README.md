@@ -4,6 +4,14 @@ An interactive analysis lens for suspicious `.eml` files — built for CTF
 and training work, where you need the right answer *and* the reason behind
 it.
 
+[![tests](https://github.com/iamjoshgilman/franking/actions/workflows/test.yml/badge.svg)](https://github.com/iamjoshgilman/franking/actions/workflows/test.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+Runs on Linux, macOS and Windows — CI exercises all three, including a Windows
+job that sets the console to a legacy code page, because the reports carry the
+non-ASCII characters a homoglyph attack is made of.
+
 > A *franking mark* is the postmark that proves postage was genuinely paid.
 > Forging one has been a crime since the penny post. This tool asks the same
 > question of an email: are the marks it carries real, or just printed on?
