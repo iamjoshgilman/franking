@@ -276,6 +276,16 @@ class TestCopyPayloads:
         assert "statement_march.pdf.exe" in payload
 
 
+def test_detail_refresh_is_safe_without_mounted_widgets(app):
+    """An OptionHighlighted message can arrive while the app is tearing down.
+
+    That path runs _refresh_detail -> selected -> query_one("#items"), which is
+    how Windows CI failed while Linux and macOS passed on timing.
+    """
+    assert app.selected is None
+    app._refresh_detail()
+
+
 def test_rebuild_is_safe_without_mounted_widgets(app):
     """A deferred re-render can land after the screen has gone.
 

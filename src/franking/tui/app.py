@@ -205,9 +205,16 @@ class FrankingApp(App):
 
     @property
     def selected(self) -> Node | None:
-        """The row highlighted in the middle column."""
-        return self._pick(self.query_one("#items", OptionList),
-                          self.current_container.children)
+        """The row highlighted in the middle column.
+
+        None when nothing is highlighted and also when the column is not on
+        screen: an OptionHighlighted message can be delivered while the app is
+        tearing down, and every caller already handles None.
+        """
+        items = self._widget("#items", OptionList)
+        if items is None:
+            return None
+        return self._pick(items, self.current_container.children)
 
     @property
     def selected_field(self) -> Node | None:
@@ -264,7 +271,9 @@ class FrankingApp(App):
         so a value too wide for the narrow list -- a SHA-256, a long URL --
         is always readable in full somewhere on screen.
         """
-        detail = self.query_one("#detail", Static)
+        detail = self._widget("#detail", Static)
+        if detail is None:
+            return
         if node is None:
             detail.update(Text("nothing selected", style="#7a8290"))
             return
@@ -292,7 +301,9 @@ class FrankingApp(App):
 
     def _refresh_fields(self, node: Node | None) -> None:
         """Fill the detail column with the selected row's fields."""
-        fields = self.query_one("#fields", OptionList)
+        fields = self._widget("#fields", OptionList)
+        if fields is None:
+            return
         fields.clear_options()
         if node is None or not node.children:
             fields.display = False
