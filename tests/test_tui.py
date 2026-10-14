@@ -274,3 +274,13 @@ class TestCopyPayloads:
         payload = "\n".join(f"{c.label}: {c.value}" for c in section.children)
         assert "billing@acme-invoices.example" in payload
         assert "statement_march.pdf.exe" in payload
+
+
+def test_rebuild_is_safe_without_mounted_widgets(app):
+    """A deferred re-render can land after the screen has gone.
+
+    on_mount schedules _rebuild with call_after_refresh and resize fires it
+    again, so it has to tolerate the widgets being absent. This reproduces the
+    Windows CI failure, where the callback outlived the screen.
+    """
+    app._rebuild()

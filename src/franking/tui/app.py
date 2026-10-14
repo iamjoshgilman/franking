@@ -11,9 +11,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.text import Text
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -133,8 +134,18 @@ class FrankingApp(App):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        """Re-render every list against the current column widths."""
-        keep = self.query_one("#items", OptionList).highlighted or 0
+        """Re-render every list against the current column widths.
+
+        Scheduled with call_after_refresh and fired again on resize, so it can
+        land when the widgets are not there: during shutdown, or before the
+        first compose has mounted them. A deferred re-render must not take the
+        app down with it, so missing widgets mean there is nothing to redraw.
+        """
+        try:
+            items = self.query_one("#items", OptionList)
+        except (NoMatches, ScreenStackError):
+            return
+        keep = items.highlighted or 0
         self._refresh_spine()
         self._refresh_items(keep=keep)
 
