@@ -45,17 +45,20 @@ jobs:
         shell: cmd
         run: |
           chcp 1252
-          python -m franking --json tests/fixtures/evasive.eml > nul
-          if %errorlevel% geq 2 exit /b %errorlevel%
-          python -m franking --findings tests/fixtures/evasive.eml > nul
-          if %errorlevel% geq 2 exit /b %errorlevel%
-          python -m franking --tree tests/fixtures/evasive.eml > nul
-          if %errorlevel% geq 2 exit /b %errorlevel%
-          python -m franking --iocs tests/fixtures/evasive.eml > nul
-          if %errorlevel% geq 2 exit /b %errorlevel%
+          for %%f in (--json --findings --iocs --tree) do (
+            python -m franking %%f tests/fixtures/evasive.eml > nul
+            if errorlevel 2 exit /b 1
+          )
+          exit /b 0
 
       - name: CLI smoke (POSIX)
         if: runner.os != 'Windows'
+        # Exit 1 means HIGH findings, which is the expected result for this
+        # fixture; only 2+ is a real failure.
         run: |
-          python -m franking --json tests/fixtures/evasive.eml > /dev/null || [ $? -le 1 ]
+          for flag in --json --findings --iocs --tree; do
+            python -m franking "$flag" tests/fixtures/evasive.eml > /dev/null
+            rc=$?
+            if [ "$rc" -ge 2 ]; then echo "$flag exited $rc"; exit 1; fi
+          done
           python -m franking --rules > /dev/null
