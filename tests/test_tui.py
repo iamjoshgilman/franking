@@ -276,6 +276,16 @@ class TestCopyPayloads:
         assert "statement_march.pdf.exe" in payload
 
 
+@pytest.mark.parametrize(
+    "prop", ["selected", "selected_field", "focused_node", "current_container"]
+)
+def test_state_properties_are_safe_without_mounted_widgets(app, prop):
+    """Every one of these is reached from a message or action handler, and a
+    message can be delivered after the screen has gone. None is what their own
+    annotations already promise, so no caller needs to change."""
+    getattr(app, prop)
+
+
 def test_detail_refresh_is_safe_without_mounted_widgets(app):
     """An OptionHighlighted message can arrive while the app is tearing down.
 

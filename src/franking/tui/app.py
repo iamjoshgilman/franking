@@ -218,11 +218,18 @@ class FrankingApp(App):
 
     @property
     def selected_field(self) -> Node | None:
-        """The row highlighted in the detail column."""
+        """The row highlighted in the detail column.
+
+        Reached from the highlight and focus handlers, so the column may be
+        gone by the time the message is delivered.
+        """
         node = self.selected
         if node is None:
             return None
-        return self._pick(self.query_one("#fields", OptionList), node.children)
+        fields = self._widget("#fields", OptionList)
+        if fields is None:
+            return None
+        return self._pick(fields, node.children)
 
     @property
     def focused_node(self) -> Node | None:
@@ -232,9 +239,11 @@ class FrankingApp(App):
         pane rather than silently meaning "the attachment" when the cursor
         is on its hash.
         """
-        if self.query_one("#fields", OptionList).has_focus:
+        fields = self._widget("#fields", OptionList)
+        if fields is not None and fields.has_focus:
             return self.selected_field or self.selected
-        if self.query_one("#spine", OptionList).has_focus:
+        spine = self._widget("#spine", OptionList)
+        if spine is not None and spine.has_focus:
             return self.current_container
         return self.selected
 
