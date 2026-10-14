@@ -492,7 +492,10 @@ class FrankingApp(App):
         stem = self.doc.path.stem if self.doc.path else "message"
         target = Path.cwd() / f"{stem}.franking.json"
         try:
-            target.write_text(json_report(self.doc, self.findings))
+            # Explicit utf-8: the default is the locale encoding, which on
+            # Windows cannot represent the homoglyphs the report exists to show.
+            target.write_text(json_report(self.doc, self.findings),
+                              encoding="utf-8")
         except OSError as exc:
             self.notify(f"export failed: {exc}", severity="error")
             return

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
@@ -82,7 +83,22 @@ def rules_catalogue() -> str:
     return "\n".join(lines)
 
 
+def _use_utf8_output() -> None:
+    """Stop Windows consoles from crashing on the characters that matter.
+
+    Reports carry the raw non-ASCII found in the message, which is the point:
+    Cyrillic homoglyphs in a lookalike domain are evidence. On Windows the
+    default stdout encoding is the console code page, so printing them raises
+    UnicodeEncodeError and takes the whole run down. errors="replace" means a
+    legacy console degrades to '?' instead of dying.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _use_utf8_output()
     args = build_parser().parse_args(argv)
 
     if args.rules:

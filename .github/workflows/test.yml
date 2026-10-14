@@ -1,0 +1,61 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.12']
+        include:
+          # Oldest and newest supported, on Linux only, to keep the grid small.
+          - os: ubuntu-latest
+            python: '3.10'
+          - os: ubuntu-latest
+            python: '3.13'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest -q
+
+      # The reports carry the non-ASCII found in the message, so prove the CLI
+      # survives a console that cannot represent it. On Windows this is the
+      # real legacy code page, not a simulation.
+      - name: CLI smoke on a legacy console (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          chcp 1252
+          python -m franking --json tests/fixtures/evasive.eml > nul
+          if %errorlevel% geq 2 exit /b %errorlevel%
+          python -m franking --findings tests/fixtures/evasive.eml > nul
+          if %errorlevel% geq 2 exit /b %errorlevel%
+          python -m franking --tree tests/fixtures/evasive.eml > nul
+          if %errorlevel% geq 2 exit /b %errorlevel%
+          python -m franking --iocs tests/fixtures/evasive.eml > nul
+          if %errorlevel% geq 2 exit /b %errorlevel%
+
+      - name: CLI smoke (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          python -m franking --json tests/fixtures/evasive.eml > /dev/null || [ $? -le 1 ]
+          python -m franking --rules > /dev/null

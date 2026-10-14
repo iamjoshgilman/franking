@@ -71,7 +71,7 @@ def main() -> int:
 
     content = render()
     if args.check:
-        current = TARGET.read_text() if TARGET.exists() else ""
+        current = TARGET.read_text(encoding="utf-8") if TARGET.exists() else ""
         if current != content:
             print(f"{TARGET} is out of date; run tools/gen_rules_doc.py",
                   file=sys.stderr)
@@ -79,7 +79,7 @@ def main() -> int:
         return 0
 
     TARGET.parent.mkdir(exist_ok=True)
-    TARGET.write_text(content)
+    TARGET.write_text(content, encoding="utf-8")
     print(f"wrote {TARGET} ({len(catalogue())} rules)")
     return 0
 
